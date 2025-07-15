@@ -181,6 +181,45 @@ def authenticate_user(name):
     save_data(USERS_FILE, users)
     return new_user
 
+# 检查用户历史购买数量
+def get_user_purchase_history(user_name, product_id):
+    """获取用户对特定商品的历史购买数量"""
+    orders = load_data(ORDERS_FILE)
+    total_purchased = 0
+    
+    for order in orders:
+        if order.get('user_name') == user_name:
+            for item in order.get('items', []):
+                if item.get('product_id') == product_id:
+                    total_purchased += item.get('quantity', 0)
+    
+    return total_purchased
+
+# 检查限购限制（包含历史购买记录）
+def check_purchase_limit(user_name, product_id, current_cart_quantity, new_quantity, purchase_limit):
+    """
+    检查限购限制，包含用户历史购买记录
+    返回 (是否允许购买, 错误信息)
+    """
+    if purchase_limit <= 0:
+        return True, ""  # 不限购
+    
+    # 获取历史购买数量
+    historical_quantity = get_user_purchase_history(user_name, product_id)
+    
+    # 计算总数量：历史购买 + 购物车中已有 + 本次要添加
+    total_quantity = historical_quantity + current_cart_quantity + new_quantity
+    
+    if total_quantity > purchase_limit:
+        error_msg = f"⚠️ 该商品限购{purchase_limit}件\n"
+        error_msg += f"您已购买：{historical_quantity}件\n"
+        error_msg += f"购物车中：{current_cart_quantity}件\n"
+        error_msg += f"本次添加：{new_quantity}件\n"
+        error_msg += f"总计：{total_quantity}件，超出限购数量！"
+        return False, error_msg
+    
+    return True, ""
+
 # 登录页面
 def login_page():
     """登录页面"""
@@ -274,14 +313,21 @@ def inventory_management():
             st.error("❌ 数据框为空，无法显示商品信息")
             return
         
-        # 确保所有商品都有 sold 字段
+        # 确保所有商品都有 sold 和 purchase_limit 字段
         if 'sold' not in df.columns:
             df['sold'] = 0
+        if 'purchase_limit' not in df.columns:
+            df['purchase_limit'] = 0  # 0表示不限购
         
-        # 重新排列列的顺序
+        # 为旧数据添加限购字段
+        for product in inventory:
+            if 'purchase_limit' not in product:
+                product['purchase_limit'] = 0  # 0表示不限购
+        
+        # 重新排列列的顺序，添加限购数量列
         try:
-            df = df[['barcode', 'name', 'price', 'stock', 'sold', 'description', 'created_at']]
-            df.columns = ['条码', '商品名称', '价格', '库存', '已售', '描述', '添加时间']
+            df = df[['barcode', 'name', 'price', 'stock', 'sold', 'purchase_limit', 'description', 'created_at']]
+            df.columns = ['条码', '商品名称', '价格', '库存', '已售', '限购数量', '描述', '添加时间']
         except KeyError as e:
             st.error(f"❌ 数据列缺失: {e}")
             st.write("现有列：", df.columns.tolist())
@@ -304,16 +350,69 @@ def inventory_management():
             # 如果时间格式化失败，保持原样
             df['添加时间'] = df['添加时间'].astype(str)
         
-        # 显示数据表格
+        # 显示可编辑的数据表格
         st.write("### 📊 商品库存管理")
         
+        # 创建用于编辑的数据框，保持原始数值格式以便编辑
+        edit_df = df.copy()
+        
+        # 将限购数量恢复为数值格式以便编辑
         try:
-            # 直接显示数据表格，不再添加额外的调试信息
-            st.dataframe(df, use_container_width=True)
+            # 从原始数据获取限购数量的数值
+            edit_df['限购数量'] = [product.get('purchase_limit', 0) for product in inventory]
         except Exception as e:
-            st.error(f"数据表格显示异常: {e}")
-            # 备用显示方法
-            st.table(df)
+            st.warning(f"限购数量数据处理失败: {e}")
+            edit_df['限购数量'] = 0
+        
+        # 格式化显示列但保持限购数量为可编辑的数值
+        display_df = edit_df.copy()
+        
+        try:
+            # 使用可编辑的数据表格
+            edited_df = st.data_editor(
+                display_df,
+                use_container_width=True,
+                num_rows="fixed",
+                disabled=["条码", "商品名称", "价格", "库存", "已售", "描述", "添加时间"],  # 禁用其他列的编辑
+                column_config={
+                    "限购数量": st.column_config.NumberColumn(
+                        "限购数量",
+                        help="设置商品限购数量，0表示不限购",
+                        min_value=0,
+                        max_value=9999,
+                        step=1,
+                        format="%d"
+                    ),
+                    "价格": st.column_config.TextColumn("价格"),
+                    "库存": st.column_config.NumberColumn("库存"),
+                    "已售": st.column_config.NumberColumn("已售"),
+                    "添加时间": st.column_config.TextColumn("添加时间")
+                },
+                key="inventory_editor"
+            )
+            
+            # 检查是否有限购数量被修改
+            if not edited_df.equals(display_df):
+                # 更新库存数据中的限购数量
+                for i, row in edited_df.iterrows():
+                    if i < len(inventory):
+                        new_limit = int(row['限购数量']) if pd.notna(row['限购数量']) else 0
+                        old_limit = inventory[i].get('purchase_limit', 0)
+                        
+                        if new_limit != old_limit:
+                            inventory[i]['purchase_limit'] = new_limit
+                
+                # 保存数据
+                save_data(INVENTORY_FILE, inventory)
+                st.success("✅ 限购数量已更新！")
+                st.rerun()
+                
+        except Exception as e:
+            st.error(f"可编辑表格显示异常: {e}")
+            # 备用显示方法 - 显示格式化后的只读表格
+            readonly_df = df.copy()
+            readonly_df['限购数量'] = readonly_df['限购数量'].apply(lambda x: "不限购" if pd.isna(x) or x == 0 else f"{int(x)}件")
+            st.dataframe(readonly_df, use_container_width=True)
         
         # 操作按钮
         col1, col2, col3 = st.columns(3)
@@ -341,6 +440,8 @@ def inventory_management():
                             description = str(row.get("描述", row.get("description", ""))).strip()
                             # 处理条码字段（支持多种表头名称）
                             barcode = str(row.get("条码", row.get("code", row.get("barcode", "")))).strip()
+                            # 处理限购数量字段（支持多种表头名称）
+                            purchase_limit = row.get("限购数量", row.get("limit", row.get("purchase_limit", 0)))
                             
                             # 处理价格数据
                             if pd.isna(price) or price == "":
@@ -354,6 +455,12 @@ def inventory_management():
                             else:
                                 stock = int(stock)
                             
+                            # 处理限购数量数据
+                            if pd.isna(purchase_limit) or purchase_limit == "":
+                                purchase_limit = 0  # 0表示不限购
+                            else:
+                                purchase_limit = int(purchase_limit)
+                            
                             # 如果没有条码，使用商品名称+随机数生成
                             if not barcode:
                                 barcode = f"{name[:3]}{str(uuid.uuid4())[:6]}"
@@ -365,6 +472,7 @@ def inventory_management():
                                 "stock": stock,
                                 "description": description,
                                 "barcode": barcode,
+                                "purchase_limit": purchase_limit,
                                 "created_at": datetime.now().isoformat()
                             }
                             
@@ -409,8 +517,13 @@ def inventory_management():
             # 导出当前库存
             # 创建用于导出的数据框，保持原始数值格式
             export_df = pd.DataFrame(inventory)
-            export_df = export_df[['barcode', 'name', 'price', 'stock', 'sold', 'description', 'created_at']]
-            export_df.columns = ['条码', '商品名称', '价格', '库存', '已售', '描述', '添加时间']
+            # 确保所有商品都有purchase_limit字段
+            for product in inventory:
+                if 'purchase_limit' not in product:
+                    product['purchase_limit'] = 0
+            export_df = pd.DataFrame(inventory)
+            export_df = export_df[['barcode', 'name', 'price', 'stock', 'sold', 'purchase_limit', 'description', 'created_at']]
+            export_df.columns = ['条码', '商品名称', '价格', '库存', '已售', '限购数量', '描述', '添加时间']
             
             csv_data = export_df.to_csv(index=False, encoding='utf-8-sig')
             st.download_button(
@@ -445,6 +558,8 @@ def inventory_management():
                         description = str(row.get("描述", row.get("description", ""))).strip()
                         # 处理条码字段（支持多种表头名称）
                         barcode = str(row.get("条码", row.get("code", row.get("barcode", "")))).strip()
+                        # 处理限购数量字段（支持多种表头名称）
+                        purchase_limit = row.get("限购数量", row.get("limit", row.get("purchase_limit", 0)))
                         
                         # 处理价格数据
                         if pd.isna(price) or price == "":
@@ -458,6 +573,12 @@ def inventory_management():
                         else:
                             stock = int(stock)
                         
+                        # 处理限购数量数据
+                        if pd.isna(purchase_limit) or purchase_limit == "":
+                            purchase_limit = 0  # 0表示不限购
+                        else:
+                            purchase_limit = int(purchase_limit)
+                        
                         # 如果没有条码，使用商品名称+随机数生成
                         if not barcode:
                             barcode = f"{name[:3]}{str(uuid.uuid4())[:6]}"
@@ -469,6 +590,7 @@ def inventory_management():
                             "stock": stock,
                             "description": description,
                             "barcode": barcode,
+                            "purchase_limit": purchase_limit,
                             "created_at": datetime.now().isoformat()
                         }
                         
@@ -497,21 +619,25 @@ def order_management():
     orders = load_data(ORDERS_FILE)
     
     if orders:
-        # 计算统计数据
+        # 计算统计数据 - 兼容新旧订单格式
         total_cash = sum(order.get('cash_amount', 0) for order in orders)
         total_voucher = sum(order.get('voucher_amount', 0) for order in orders)
-        total_amount = sum(order.get('total_amount', 0) for order in orders)
+        total_original = sum(order.get('original_amount', order.get('total_amount', 0)) for order in orders)
+        total_final = sum(order.get('total_amount', 0) for order in orders)
+        total_savings = sum(order.get('discount_savings', 0) for order in orders)
         
         # 订单统计
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
             st.metric("总订单数", len(orders))
         with col2:
-            st.metric("现金支付总额", f"¥{total_cash:.2f}")
+            st.metric("商品原价总额", f"¥{total_original:.2f}")
         with col3:
-            st.metric("内购券支付总额", f"¥{total_voucher:.2f}")
+            st.metric("折扣优惠总额", f"¥{total_savings:.2f}")
         with col4:
-            st.metric("订单总金额", f"¥{total_amount:.2f}")
+            st.metric("现金收款", f"¥{total_cash:.2f}")
+        with col5:
+            st.metric("内购券收款", f"¥{total_voucher:.2f}")
         
         # 处理订单数据，展开商品信息
         order_details = []
@@ -531,6 +657,22 @@ def order_management():
                         barcode = product.get('barcode', product_id)
                         break
                 
+                # 获取订单折扣信息（兼容新旧订单）
+                order_original = order.get('original_amount', order.get('total_amount', 0))
+                order_discount = order.get('discount_savings', 0)
+                order_discount_text = order.get('discount_text', '无折扣')
+                order_final = order.get('total_amount', 0)
+                order_cash = order.get('cash_amount', 0)
+                order_voucher = order.get('voucher_amount', 0)
+                
+                # 处理多付显示（无找零）
+                total_paid = order_cash + order_voucher
+                if total_paid > order_final:
+                    overpay = total_paid - order_final
+                    overpay_display = f"¥{overpay:.2f} (不设找零)"
+                else:
+                    overpay_display = "¥0.00"
+                
                 order_detail = {
                     '订单ID': order.get('order_id', 'N/A'),
                     '用户姓名': order.get('user_name', 'N/A'),
@@ -539,9 +681,13 @@ def order_management():
                     '单价': f"¥{item.get('price', 0):.2f}",
                     '数量': item.get('quantity', 0),
                     '小计': f"¥{item.get('price', 0) * item.get('quantity', 0):.2f}",
-                    '现金支付': f"¥{order.get('cash_amount', 0):.2f}",
-                    '内购券支付': f"¥{order.get('voucher_amount', 0):.2f}",
-                    '支付方式': order.get('payment_method', 'N/A'),
+                    '折扣优惠': order_discount_text,
+                    '优惠金额': f"¥{order_discount:.2f}",
+                    '应付金额': f"¥{order_final:.2f}",
+                    '现金支付': f"¥{order_cash:.2f}",
+                    '内购券支付': f"¥{order_voucher:.2f}",
+                    '多付金额': overpay_display,
+                    '支付方式': order.get('payment_method', '现金支付'),
                     '订单时间': order.get('order_time', 'N/A')
                 }
                 order_details.append(order_detail)
@@ -646,20 +792,34 @@ def data_statistics():
         col1, col2 = st.columns(2)
         
         with col1:
-            st.write("### 💰 支付金额统计")
-            # 计算现金和内购券支付金额
-            cash_total = sum(order.get('cash_amount', 0) for order in orders)
-            voucher_total = sum(order.get('voucher_amount', 0) for order in orders)
+            st.write("### 💰 支付方式统计")
+            # 计算现金和内购券支付金额（兼容新旧订单）
+            total_cash = sum(order.get('cash_amount', 0) for order in orders)
+            total_voucher = sum(order.get('voucher_amount', 0) for order in orders)
+            total_original = sum(order.get('original_amount', order.get('total_amount', 0)) for order in orders)
+            total_discount = sum(order.get('discount_savings', 0) for order in orders)
             
+            # 统计图表数据
             payment_data = pd.DataFrame({
                 '支付方式': ['现金支付', '内购券支付'],
-                '金额': [cash_total, voucher_total]
+                '金额': [total_cash, total_voucher]
             })
             st.bar_chart(payment_data.set_index('支付方式'))
             
             # 显示具体数值
-            st.write(f"现金支付总额: ¥{cash_total:.2f}")
-            st.write(f"内购券支付总额: ¥{voucher_total:.2f}")
+            st.write(f"**现金支付总额:** ¥{total_cash:.2f}")
+            st.write(f"**内购券支付总额:** ¥{total_voucher:.2f}")
+            st.write(f"**商品原价总额:** ¥{total_original:.2f}")
+            st.write(f"**折扣优惠总额:** ¥{total_discount:.2f}")
+            
+            # 计算平均折扣率（仅针对现金支付订单）
+            cash_orders = [order for order in orders if order.get('voucher_amount', 0) == 0]
+            if cash_orders:
+                cash_original = sum(order.get('original_amount', order.get('total_amount', 0)) for order in cash_orders)
+                cash_discount = sum(order.get('discount_savings', 0) for order in cash_orders)
+                if cash_original > 0:
+                    avg_discount_rate = (cash_discount / cash_original) * 100
+                    st.write(f"**现金支付平均折扣率:** {avg_discount_rate:.1f}%")
         
         with col2:
             st.write("### 👥 用户购买统计")
@@ -718,7 +878,7 @@ def shopping_page():
     st.subheader("🛍️ 商品列表")
     
     # 表格表头
-    col1, col2, col3, col4, col5, col6 = st.columns([2, 3, 1, 1, 1, 1])
+    col1, col2, col3, col4, col5, col6, col7 = st.columns([1.5, 2.5, 1, 1, 1, 1, 1])
     with col1:
         st.write("**条码**")
     with col2:
@@ -728,15 +888,17 @@ def shopping_page():
     with col4:
         st.write("**价格**")
     with col5:
-        st.write("**数量**")
+        st.write("**限购数量**")
     with col6:
+        st.write("**数量**")
+    with col7:
         st.write("**加入购物车**")
     
     st.divider()
     
     # 为每个商品添加数量选择和加入购物车按钮
     for i, product in enumerate(inventory):
-        col1, col2, col3, col4, col5, col6 = st.columns([2, 3, 1, 1, 1, 1])
+        col1, col2, col3, col4, col5, col6, col7 = st.columns([1.5, 2.5, 1, 1, 1, 1, 1])
         
         with col1:
             st.write(product.get('barcode', 'N/A'))
@@ -752,42 +914,102 @@ def shopping_page():
             st.write(f"¥{product['price']:.2f}")
         
         with col5:
-            if product['stock'] > 0:
-                quantity = st.number_input(
-                    "", 
-                    min_value=1, 
-                    max_value=product['stock'], 
-                    value=1,
-                    key=f"qty_{product['id']}",
-                    label_visibility="collapsed"
-                )
+            purchase_limit = product.get('purchase_limit', 0)
+            if purchase_limit > 0:
+                # 显示历史购买信息
+                user_name = st.session_state.user['name']
+                historical_quantity = get_user_purchase_history(user_name, product['id'])
+                
+                if historical_quantity > 0:
+                    remaining = max(0, purchase_limit - historical_quantity)
+                    if remaining > 0:
+                        st.write(f":orange[限购{purchase_limit}件]\n:blue[已购{historical_quantity}件]\n:green[可购{remaining}件]")
+                    else:
+                        st.write(f":orange[限购{purchase_limit}件]\n:red[已购{historical_quantity}件]\n:red[已达上限]")
+                else:
+                    st.write(f":orange[{purchase_limit}件]")
             else:
-                st.write("-")
+                st.write(":green[不限购]")
         
         with col6:
             if product['stock'] > 0:
-                if st.button("加入购物车", key=f"add_{product['id']}"):
-                    quantity = st.session_state.get(f"qty_{product['id']}", 1)
-                    
-                    # 检查购物车中是否已有该商品
-                    existing_item = None
-                    for item in st.session_state.cart:
-                        if item['product_id'] == product['id']:
-                            existing_item = item
-                            break
-                    
-                    if existing_item:
-                        existing_item['quantity'] += quantity
-                    else:
-                        st.session_state.cart.append({
-                            'product_id': product['id'],
-                            'product_name': product['name'],
-                            'price': product['price'],
-                            'quantity': quantity
-                        })
-                    
-                    st.success(f"已添加 {quantity} 个 {product['name']} 到购物车")
-                    st.rerun()
+                # 根据限购数量和历史购买设置最大值
+                max_qty = product['stock']
+                if purchase_limit > 0:
+                    user_name = st.session_state.user['name']
+                    historical_quantity = get_user_purchase_history(user_name, product['id'])
+                    remaining = max(0, purchase_limit - historical_quantity)
+                    max_qty = min(max_qty, remaining)
+                
+                if max_qty > 0:
+                    quantity = st.number_input(
+                        "", 
+                        min_value=1, 
+                        max_value=max_qty, 
+                        value=1,
+                        key=f"qty_{product['id']}",
+                        label_visibility="collapsed"
+                    )
+                else:
+                    st.write(":red[已达上限]")
+            else:
+                st.write("-")
+        
+        with col7:
+            if product['stock'] > 0:
+                # 检查是否已达限购上限
+                purchase_limit = product.get('purchase_limit', 0)
+                can_add_to_cart = True
+                
+                if purchase_limit > 0:
+                    user_name = st.session_state.user['name']
+                    historical_quantity = get_user_purchase_history(user_name, product['id'])
+                    remaining = max(0, purchase_limit - historical_quantity)
+                    if remaining <= 0:
+                        can_add_to_cart = False
+                
+                if can_add_to_cart:
+                    if st.button("加入购物车", key=f"add_{product['id']}"):
+                        quantity = st.session_state.get(f"qty_{product['id']}", 1)
+                        
+                        # 检查购物车中是否已有该商品
+                        existing_item = None
+                        current_cart_quantity = 0
+                        for item in st.session_state.cart:
+                            if item['product_id'] == product['id']:
+                                existing_item = item
+                                current_cart_quantity = item['quantity']
+                                break
+                        
+                        # 检查限购限制（包含历史购买记录）
+                        purchase_limit = product.get('purchase_limit', 0)
+                        user_name = st.session_state.user['name']
+                        
+                        can_purchase, error_msg = check_purchase_limit(
+                            user_name, 
+                            product['id'], 
+                            current_cart_quantity, 
+                            quantity, 
+                            purchase_limit
+                        )
+                        
+                        if not can_purchase:
+                            st.error(error_msg)
+                        else:
+                            if existing_item:
+                                existing_item['quantity'] += quantity
+                            else:
+                                st.session_state.cart.append({
+                                    'product_id': product['id'],
+                                    'product_name': product['name'],
+                                    'price': product['price'],
+                                    'quantity': quantity
+                                })
+                            
+                            st.success(f"已添加 {quantity} 个 {product['name']} 到购物车")
+                            st.rerun()
+                else:
+                    st.button("已达上限", disabled=True, key=f"limit_{product['id']}")
             else:
                 st.button("库存不足", key=f"out_of_stock_{product['id']}", disabled=True)
     
@@ -796,35 +1018,130 @@ def shopping_page():
         st.subheader("🛒 购物车")
         
         total_amount = 0
+        # 用于标记是否有数量变化
+        quantity_changed = False
+        
         for i, item in enumerate(st.session_state.cart):
             col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
             
-            # 根据商品ID查找条码
+            # 根据商品ID查找条码、限购信息和当前库存
             barcode = 'N/A'
+            purchase_limit = 0
+            current_stock = 0
             for product in inventory:
                 if product.get('id') == item['product_id']:
                     barcode = product.get('barcode', 'N/A')
+                    purchase_limit = product.get('purchase_limit', 0)
+                    current_stock = product.get('stock', 0)
                     break
             
             with col1:
-                st.write(f"{barcode} - {item['product_name']}")
+                product_display = f"{barcode} - {item['product_name']}"
+                if purchase_limit > 0:
+                    # 获取用户历史购买数量
+                    user_name = st.session_state.user['name']
+                    historical_quantity = get_user_purchase_history(user_name, item['product_id'])
+                    total_with_history = historical_quantity + item['quantity']
+                    
+                    if total_with_history > purchase_limit:
+                        product_display += f" ⚠️ (限购{purchase_limit}件，已购{historical_quantity}件，总计{total_with_history}件，超限)"
+                    elif historical_quantity > 0:
+                        product_display += f" (限购{purchase_limit}件，已购{historical_quantity}件)"
+                    else:
+                        product_display += f" (限购{purchase_limit}件)"
+                st.write(product_display)
+                
             with col2:
                 st.write(f"¥{item['price']}")
+                
             with col3:
-                st.write(f"x{item['quantity']}")
+                # 计算最大可选数量：考虑库存和限购
+                max_quantity = current_stock + item['quantity']  # 库存+购物车中的数量
+                
+                if purchase_limit > 0:
+                    user_name = st.session_state.user['name']
+                    historical_quantity = get_user_purchase_history(user_name, item['product_id'])
+                    # 购物车中其他相同商品的数量
+                    other_cart_quantity = 0
+                    for j, other_item in enumerate(st.session_state.cart):
+                        if j != i and other_item['product_id'] == item['product_id']:
+                            other_cart_quantity += other_item['quantity']
+                    
+                    remaining_limit = max(0, purchase_limit - historical_quantity - other_cart_quantity)
+                    max_quantity = min(max_quantity, remaining_limit)
+                
+                # 数量选择器
+                if max_quantity > 0:
+                    new_quantity = st.number_input(
+                        "数量",
+                        min_value=1,
+                        max_value=max_quantity,
+                        value=item['quantity'],
+                        key=f"cart_qty_{i}",
+                        label_visibility="collapsed",
+                        help=f"最大可选: {max_quantity}"
+                    )
+                    
+                    # 检查数量是否改变
+                    if new_quantity != item['quantity']:
+                        # 验证限购限制
+                        if purchase_limit > 0:
+                            user_name = st.session_state.user['name']
+                            current_cart_quantity = sum(cart_item['quantity'] for j, cart_item in enumerate(st.session_state.cart) 
+                                                      if j != i and cart_item['product_id'] == item['product_id'])
+                            
+                            can_purchase, error_msg = check_purchase_limit(
+                                user_name, 
+                                item['product_id'], 
+                                current_cart_quantity, 
+                                new_quantity, 
+                                purchase_limit
+                            )
+                            
+                            if can_purchase:
+                                st.session_state.cart[i]['quantity'] = new_quantity
+                                quantity_changed = True
+                            else:
+                                st.error(error_msg)
+                                # 重置为原来的数量
+                                st.session_state.cart[i]['quantity'] = item['quantity']
+                        else:
+                            st.session_state.cart[i]['quantity'] = new_quantity
+                            quantity_changed = True
+                else:
+                    st.write("无库存")
+                    # 如果没有库存，标记为删除
+                    st.session_state.cart[i]['_to_remove'] = True
+                    
             with col4:
                 subtotal = item['price'] * item['quantity']
                 st.write(f"¥{subtotal:.2f}")
                 total_amount += subtotal
+                
             with col5:
                 if st.button("删除", key=f"remove_{i}"):
                     st.session_state.cart.pop(i)
                     st.rerun()
         
-        st.write(f"### 总计: ¥{total_amount:.2f}")
+        # 删除无库存的商品
+        st.session_state.cart = [item for item in st.session_state.cart if not item.get('_to_remove', False)]
         
-        # 支付方式详细输入
-        st.write("### 💰 支付方式")
+        # 如果数量有变化，刷新页面以更新显示
+        if quantity_changed:
+            st.rerun()
+        
+        # 显示价格信息
+        st.write(f"### 💰 价格明细")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write(f"**商品原价:** ¥{total_amount:.2f}")
+            total_items = sum(item['quantity'] for item in st.session_state.cart)
+            st.write(f"**商品总件数:** {total_items} 件")
+        
+        # 支付方式
+        st.write("### 💳 支付方式")
+        st.info("💡 **现金折扣优惠:** 全现金支付享受阶梯折扣！1件85折，2件8折，3件及以上75折")
+        
         col1, col2 = st.columns(2)
         
         with col1:
@@ -833,19 +1150,73 @@ def shopping_page():
         with col2:
             voucher_amount = st.number_input("内购券支付金额", min_value=0.0, value=0.0, step=0.01, format="%.2f")
         
-        # 检查支付金额
-        payment_total = cash_amount + voucher_amount
-        if payment_total < total_amount:
-            st.error(f"⚠️ 支付金额不足！应付：¥{total_amount:.2f}，实付：¥{payment_total:.2f}")
+        # 计算折扣逻辑
+        if voucher_amount > 0:
+            # 有内购券支付，不享受折扣
+            discount_rate = 1.0
+            discount_text = "使用内购券，无折扣"
+            discount_savings = 0
+            final_amount = total_amount
+            st.info("🔸 使用内购券支付，按原价结算")
+        else:
+            # 全现金支付，享受阶梯折扣
+            if total_items >= 3:
+                discount_rate = 0.75  # 75折
+                discount_text = "全现金支付 - 3件及以上75折"
+            elif total_items == 2:
+                discount_rate = 0.8   # 8折
+                discount_text = "全现金支付 - 2件8折"
+            elif total_items == 1:
+                discount_rate = 0.85  # 85折
+                discount_text = "全现金支付 - 1件85折"
+            else:
+                discount_rate = 1.0
+                discount_text = "无商品"
+            
+            discount_savings = total_amount * (1 - discount_rate)
+            final_amount = total_amount - discount_savings
+            
+            if discount_rate < 1.0:
+                st.success(f"🎉 {discount_text}，优惠¥{discount_savings:.2f}")
+        
+        # 计算全现金支付金额（享受折扣后的金额）
+        cash_only_amount = total_amount * (0.75 if total_items >= 3 else 0.8 if total_items == 2 else 0.85 if total_items == 1 else 1.0)
+        
+        with col2:
+            st.write(f"**折扣说明:** {discount_text}")
+            if discount_savings > 0:
+                st.write(f"**优惠金额:** -¥{discount_savings:.2f}")
+            
+            # 始终显示应付金额和全现金支付金额进行对比
+            if voucher_amount > 0:
+                # 有内购券时，应付金额是原价，全现金支付金额是折扣价
+                st.write(f"### **应付金额:** ¥{final_amount:.2f}")
+                st.write(f"**全现金支付金额:** ¥{cash_only_amount:.2f}")
+            else:
+                # 全现金支付时，也显示两个金额让用户清楚对比
+                st.write(f"### **应付金额:** ¥{total_amount:.2f}")
+                st.write(f"**全现金支付金额:** ¥{cash_only_amount:.2f}")
+                if discount_rate < 1.0:
+                    st.write(f"**（当前享受折扣）**")
+        
+        # 检查支付金额 - 全现金支付时使用折扣价验证
+        total_payment = cash_amount + voucher_amount
+        required_amount = final_amount  # 实际需要支付的金额（有内购券时是原价，全现金时是折扣价）
+        
+        if total_payment < required_amount:
+            if voucher_amount > 0:
+                st.error(f"⚠️ 支付金额不足！应付（原价）：¥{required_amount:.2f}，实付：¥{total_payment:.2f}")
+            else:
+                st.error(f"⚠️ 支付金额不足！应付（折扣价）：¥{required_amount:.2f}，实付：¥{total_payment:.2f}")
             payment_valid = False
         else:
-            if payment_total > total_amount:
-                st.warning(f"⚠️ 支付金额大于订单总额：应付：¥{total_amount:.2f}，实付：¥{payment_total:.2f}，多付差额不找零")
-            else:
-                st.success(f"✅ 支付金额正确：¥{payment_total:.2f}")
+            if total_payment > required_amount:
+                overpay = total_payment - required_amount
+                st.info(f"💡 多付金额：¥{overpay:.2f}（不设找零）")
+            st.success(f"✅ 支付金额确认：¥{total_payment:.2f}")
             payment_valid = True
         
-        # 显示支付明细
+        # 确定支付方式
         if cash_amount > 0 and voucher_amount > 0:
             payment_method = "混合支付"
         elif cash_amount > 0:
@@ -853,22 +1224,36 @@ def shopping_page():
         elif voucher_amount > 0:
             payment_method = "内购券支付"
         else:
-            payment_method = "未选择支付方式"
-            payment_valid = False
-        
-        st.info(f"支付方式：{payment_method}")
+            payment_method = "无支付"
         
         if st.button("提交订单", disabled=not payment_valid):
-            # 检查库存
+            # 检查库存和限购
             inventory = load_data(INVENTORY_FILE)
             can_order = True
+            user_name = st.session_state.user['name']
             
             for cart_item in st.session_state.cart:
                 for product in inventory:
                     if product['id'] == cart_item['product_id']:
+                        # 检查库存
                         if product['stock'] < cart_item['quantity']:
                             st.error(f"{product['name']} 库存不足！当前库存: {product['stock']}")
                             can_order = False
+                        
+                        # 检查限购（包含历史购买记录）
+                        purchase_limit = product.get('purchase_limit', 0)
+                        if purchase_limit > 0:
+                            can_purchase, error_msg = check_purchase_limit(
+                                user_name, 
+                                product['id'], 
+                                0,  # 购物车检查时不考虑购物车中的其他商品
+                                cart_item['quantity'], 
+                                purchase_limit
+                            )
+                            
+                            if not can_purchase:
+                                st.error(f"{product['name']} - {error_msg}")
+                                can_order = False
                         break
             
             if can_order:
@@ -877,11 +1262,15 @@ def shopping_page():
                     'order_id': str(uuid.uuid4())[:8],
                     'user_name': st.session_state.user['name'],
                     'items': st.session_state.cart,
-                    'total_amount': total_amount,  # 订单商品总额
+                    'original_amount': total_amount,  # 商品原价总额
+                    'total_items': total_items,  # 商品总件数
+                    'discount_rate': discount_rate,  # 折扣率
+                    'discount_text': discount_text,  # 折扣说明
+                    'discount_savings': discount_savings,  # 优惠金额
+                    'total_amount': final_amount,  # 折扣后应付金额
                     'payment_method': payment_method,
                     'cash_amount': cash_amount,  # 实际现金支付金额
-                    'voucher_amount': voucher_amount,  # 实际内购券支付金额
-                    'actual_payment': cash_amount + voucher_amount,  # 实际支付总金额
+                    'voucher_amount': voucher_amount,  # 内购券支付金额
                     'order_time': datetime.now().isoformat()
                 }
                 
@@ -925,13 +1314,40 @@ def user_order_history():
     
     # 显示订单
     for order in user_orders:
-        with st.expander(f"订单 {order['order_id']} - {order['order_time'][:19].replace('T', ' ')} - ¥{order['total_amount']:.2f}"):
+        # 兼容旧订单格式
+        original_amount = order.get('original_amount', order.get('total_amount', 0))
+        final_amount = order.get('total_amount', 0)
+        discount_text = order.get('discount_text', '无折扣')
+        discount_savings = order.get('discount_savings', 0)
+        
+        with st.expander(f"订单 {order['order_id']} - {order['order_time'][:19].replace('T', ' ')} - 应付¥{final_amount:.2f}"):
             # 订单基本信息
             col1, col2, col3 = st.columns([2, 2, 1])
             with col1:
                 st.write(f"**支付方式:** {order['payment_method']}")
+                if discount_savings > 0:
+                    st.write(f"**折扣优惠:** {discount_text}")
+                elif order.get('voucher_amount', 0) > 0:
+                    st.write(f"**说明:** 使用内购券，无折扣")
             with col2:
-                st.write(f"**现金:** ¥{order['cash_amount']:.2f} | **内购券:** ¥{order['voucher_amount']:.2f}")
+                st.write(f"**商品原价:** ¥{original_amount:.2f}")
+                if discount_savings > 0:
+                    st.write(f"**优惠金额:** -¥{discount_savings:.2f}")
+                st.write(f"**应付金额:** ¥{final_amount:.2f}")
+                
+                # 显示支付明细
+                cash_paid = order.get('cash_amount', 0)
+                voucher_paid = order.get('voucher_amount', 0)
+                if cash_paid > 0:
+                    st.write(f"**现金支付:** ¥{cash_paid:.2f}")
+                if voucher_paid > 0:
+                    st.write(f"**内购券支付:** ¥{voucher_paid:.2f}")
+                
+                # 显示多付情况（无找零）
+                total_paid = cash_paid + voucher_paid
+                if total_paid > final_amount:
+                    overpay = total_paid - final_amount
+                    st.write(f"**多付:** ¥{overpay:.2f} (不设找零)")
             with col3:
                 # 修改订单按钮
                 if st.button("修改订单", key=f"modify_{order['order_id']}"):
@@ -979,51 +1395,51 @@ def modify_order_interface(order, inventory):
     
     with tab1:
         st.write("**当前商品列表:**")
-        
-        # 创建修改后的商品列表
         if f'modified_items_{order["order_id"]}' not in st.session_state:
             st.session_state[f'modified_items_{order["order_id"]}'] = order['items'].copy()
-        
         modified_items = st.session_state[f'modified_items_{order["order_id"]}']
         items_to_remove = []
-        
+        user_name = order.get('user_name', '')
         for i, item in enumerate(modified_items):
-            # 根据商品ID查找条码和当前库存
             barcode = 'N/A'
             current_stock = 0
+            purchase_limit = 0
+            historical_quantity = 0
             for product in inventory:
                 if product.get('id') == item['product_id']:
                     barcode = product.get('barcode', 'N/A')
                     current_stock = product.get('stock', 0)
+                    purchase_limit = product.get('purchase_limit', 0)
                     break
-            
+            # 限购校验：历史已购（不含本订单本商品）
+            historical_quantity = get_user_purchase_history(user_name, item['product_id']) - item['quantity']
+            # 最大可选 = min(库存+本订单原数量, 限购-历史已购+本订单原数量)
+            available_stock = current_stock + item['quantity']
+            if purchase_limit > 0:
+                max_limit = max(0, purchase_limit - historical_quantity)
+                max_quantity = min(available_stock, max_limit)
+            else:
+                max_quantity = available_stock
             col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
             with col1:
                 st.write(f"{barcode} - {item['product_name']}")
             with col2:
                 st.write(f"¥{item['price']:.2f}")
             with col3:
-                # 可用库存 = 当前库存 + 订单中的数量（因为这些库存是被这个订单占用的）
-                available_stock = current_stock + item['quantity']
-                
-                # 使用回调函数处理数量变化，避免直接DOM操作
                 new_quantity = st.number_input(
                     "数量",
                     min_value=0,
-                    max_value=available_stock,
+                    max_value=max_quantity,
                     value=item['quantity'],
                     key=f"mod_qty_{order['order_id']}_{i}",
                     label_visibility="collapsed",
-                    help="设为0将移除此商品"
+                    help=f"限购{purchase_limit}，历史已购{historical_quantity}，最大可选{max_quantity}"
                 )
-                
-                # 平滑更新数量
                 try:
                     modified_items[i]['quantity'] = new_quantity
                     if new_quantity == 0:
                         items_to_remove.append(i)
                 except Exception:
-                    # 忽略更新过程中的错误
                     pass
             with col4:
                 subtotal = item['price'] * new_quantity
@@ -1054,42 +1470,143 @@ def modify_order_interface(order, inventory):
                 # 如果出错，不显示错误，只是保持原状态
                 pass
         
-        # 计算新的总金额
-        new_total = sum(item['price'] * item['quantity'] for item in modified_items)
-        st.write(f"**修改后总金额:** ¥{new_total:.2f}")
+        # 计算商品总数和价格信息
+        total_items = sum(item['quantity'] for item in modified_items)
+        original_total = sum(item['price'] * item['quantity'] for item in modified_items)
+        
+        # 显示修改后的金额信息
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write(f"**商品原价:** ¥{original_total:.2f}")
+            st.write(f"**商品总件数:** {total_items} 件")
         
         # 重新设置支付方式
         st.write("**重新设置支付方式:**")
-        col1, col2 = st.columns(2)
+        st.info("💡 **现金折扣优惠:** 全现金支付享受阶梯折扣！")
         
+        col1, col2 = st.columns(2)
         with col1:
-            new_cash = st.number_input("现金支付金额", min_value=0.0, value=0.0, step=0.01, format="%.2f", key=f"new_cash_{order['order_id']}")
+            new_cash = st.number_input(
+                "现金支付金额", 
+                min_value=0.0, 
+                value=0.0, 
+                step=0.01, 
+                format="%.2f", 
+                key=f"new_cash_{order['order_id']}"
+            )
+        with col2:
+            new_voucher = st.number_input(
+                "内购券支付金额", 
+                min_value=0.0, 
+                value=0.0, 
+                step=0.01, 
+                format="%.2f", 
+                key=f"new_voucher_{order['order_id']}"
+            )
+        
+        # 计算折扣逻辑
+        if new_voucher > 0:
+            # 有内购券支付，不享受折扣
+            discount_rate = 1.0
+            discount_text = "使用内购券，无折扣"
+            discount_amount = 0
+            final_total = original_total
+            st.info("🔸 使用内购券支付，按原价结算")
+        else:
+            # 全现金支付，享受阶梯折扣
+            if total_items >= 3:
+                discount_rate = 0.75  # 75折
+                discount_text = "全现金支付 - 3件及以上75折"
+            elif total_items == 2:
+                discount_rate = 0.8   # 8折
+                discount_text = "全现金支付 - 2件8折"
+            elif total_items == 1:
+                discount_rate = 0.85  # 85折
+                discount_text = "全现金支付 - 1件85折"
+            else:
+                discount_rate = 1.0
+                discount_text = "无商品"
+            
+            discount_amount = original_total * (1 - discount_rate)
+            final_total = original_total - discount_amount
+            
+            if discount_rate < 1.0:
+                st.success(f"🎉 {discount_text}，优惠¥{discount_amount:.2f}")
+        
+        # 计算全现金支付金额（享受折扣后的金额）
+        cash_only_amount = original_total * (0.75 if total_items >= 3 else 0.8 if total_items == 2 else 0.85 if total_items == 1 else 1.0)
         
         with col2:
-            new_voucher = st.number_input("内购券支付金额", min_value=0.0, value=0.0, step=0.01, format="%.2f", key=f"new_voucher_{order['order_id']}")
+            st.write(f"**折扣说明:** {discount_text}")
+            if discount_amount > 0:
+                st.write(f"**优惠金额:** -¥{discount_amount:.2f}")
+            
+            # 区分显示两种金额
+            if new_voucher > 0:
+                # 有内购券时，应付金额是原价，全现金支付金额是折扣价
+                st.write(f"**应付金额:** ¥{final_total:.2f}")
+                st.write(f"**全现金支付金额:** ¥{cash_only_amount:.2f}")
+            else:
+                # 全现金支付时，也显示两个金额让用户清楚对比
+                st.write(f"**应付金额:** ¥{original_total:.2f}")
+                st.write(f"**全现金支付金额:** ¥{cash_only_amount:.2f}")
+                if discount_rate < 1.0:
+                    st.write(f"**（当前享受折扣）**")
         
-        new_payment_total = new_cash + new_voucher
-        if new_payment_total < new_total:
-            st.error(f"⚠️ 支付金额不足！应付：¥{new_total:.2f}，实付：¥{new_payment_total:.2f}")
+        # 检查支付金额
+        total_payment = new_cash + new_voucher
+        if total_payment < final_total:
+            st.error(f"⚠️ 支付金额不足！应付：¥{final_total:.2f}，实付：¥{total_payment:.2f}")
             payment_valid = False
         else:
-            if new_payment_total > new_total:
-                st.warning(f"⚠️ 支付金额大于订单总额：应付：¥{new_total:.2f}，实付：¥{new_payment_total:.2f}，多付差额不找零")
+            if new_voucher > 0:
+                # 有内购券支付的情况
+                if total_payment > final_total:
+                    overpay = total_payment - final_total
+                    st.info(f"� 多付金额：¥{overpay:.2f}（内购券不找零）")
+                change_amount = 0  # 内购券不找零
             else:
-                st.success(f"✅ 支付金额正确：¥{new_payment_total:.2f}")
+                # 纯现金支付的情况
+                change_amount = max(0, new_cash - final_total)
+                if change_amount > 0:
+                    st.info(f"💰 现金找零: ¥{change_amount:.2f}")
+                else:
+                    st.success("✅ 金额正确，无需找零")
+            
             payment_valid = True
         
         col1, col2 = st.columns(2)
         with col1:
             if st.button("确认修改", key=f"confirm_modify_{order['order_id']}", disabled=not payment_valid or not modified_items):
-                if update_order(order, modified_items, new_cash, new_voucher, new_total, inventory):
+                # 新增限购校验
+                limit_error = False
+                for item in modified_items:
+                    for product in inventory:
+                        if product.get('id') == item['product_id']:
+                            purchase_limit = product.get('purchase_limit', 0)
+                            if purchase_limit > 0:
+                                # 获取历史购买数量（不包含当前订单）
+                                all_orders = load_data(ORDERS_FILE)
+                                historical_quantity = 0
+                                for hist_order in all_orders:
+                                    if hist_order['user_name'] == user_name and hist_order['order_id'] != order['order_id']:
+                                        for hist_item in hist_order.get('items', []):
+                                            if hist_item.get('product_id') == item['product_id']:
+                                                historical_quantity += hist_item.get('quantity', 0)
+                                
+                                if item['quantity'] + historical_quantity > purchase_limit:
+                                    st.error(f"商品【{item['product_name']}】限购{purchase_limit}件，您已购{historical_quantity}件，本次修改后共{item['quantity']+historical_quantity}件，超出限购！")
+                                    limit_error = True
+                            break
+                if limit_error:
+                    return
+                if update_order(order, modified_items, new_cash, new_voucher, final_total, discount_rate, discount_text, discount_amount, inventory):
                     st.success("订单修改成功！")
-                    # 清理临时状态
                     if f'modified_items_{order["order_id"]}' in st.session_state:
                         del st.session_state[f'modified_items_{order["order_id"]}']
                     if 'modifying_order' in st.session_state:
                         del st.session_state['modifying_order']
-                    st.balloons()  # 添加视觉反馈
+                    st.balloons()
                     safe_rerun()
                 else:
                     st.error("订单修改失败，请重试")
@@ -1118,21 +1635,89 @@ def modify_order_interface(order, inventory):
             selected_product_name = st.selectbox("选择商品", list(product_options.keys()), key=f"add_product_{order['order_id']}")
             selected_product = product_options[selected_product_name]
             
-            # 数量选择
-            add_quantity = st.number_input("数量", min_value=1, max_value=selected_product['stock'], value=1, key=f"add_qty_{order['order_id']}")
+            # 限购信息显示和数量选择
+            purchase_limit = selected_product.get('purchase_limit', 0)
+            user_name = order.get('user_name', '')
             
-            if st.button("添加到订单", key=f"add_to_order_{order['order_id']}"):
+            if purchase_limit > 0:
+                # 获取历史购买数量（不包含当前订单）
+                all_orders = load_data(ORDERS_FILE)
+                historical_quantity = 0
+                for hist_order in all_orders:
+                    if hist_order['user_name'] == user_name and hist_order['order_id'] != order['order_id']:
+                        for item in hist_order.get('items', []):
+                            if item.get('product_id') == selected_product['id']:
+                                historical_quantity += item.get('quantity', 0)
+                
+                # 获取当前订单中的数量
+                current_quantity_in_order = 0
+                if f'modified_items_{order["order_id"]}' in st.session_state:
+                    for item in st.session_state[f'modified_items_{order["order_id"]}']:
+                        if item['product_id'] == selected_product['id']:
+                            current_quantity_in_order = item['quantity']
+                            break
+                else:
+                    for item in order['items']:
+                        if item['product_id'] == selected_product['id']:
+                            current_quantity_in_order = item['quantity']
+                            break
+                
+                remaining_limit = max(0, purchase_limit - historical_quantity - current_quantity_in_order)
+                max_add_quantity = min(selected_product['stock'], remaining_limit)
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.info(f"限购信息：\n- 限购数量：{purchase_limit}件\n- 历史已购：{historical_quantity}件\n- 当前订单：{current_quantity_in_order}件\n- 可添加：{remaining_limit}件")
+                with col2:
+                    if max_add_quantity > 0:
+                        add_quantity = st.number_input("数量", min_value=1, max_value=max_add_quantity, value=1, key=f"add_qty_{order['order_id']}")
+                    else:
+                        st.error("已达限购上限，无法添加")
+                        add_quantity = 0
+            else:
+                st.success("该商品不限购")
+                add_quantity = st.number_input("数量", min_value=1, max_value=selected_product['stock'], value=1, key=f"add_qty_{order['order_id']}")
+            
+            if add_quantity > 0 and st.button("添加到订单", key=f"add_to_order_{order['order_id']}"):
                 # 添加商品到修改列表
                 if f'modified_items_{order["order_id"]}' not in st.session_state:
                     st.session_state[f'modified_items_{order["order_id"]}'] = order['items'].copy()
                 
                 # 检查是否已存在相同商品
                 existing_item = None
+                current_quantity_in_order = 0
                 for item in st.session_state[f'modified_items_{order["order_id"]}']:
                     if item['product_id'] == selected_product['id']:
                         existing_item = item
+                        current_quantity_in_order = item['quantity']
                         break
                 
+                # 限购检查
+                purchase_limit = selected_product.get('purchase_limit', 0)
+                user_name = order.get('user_name', '')
+                
+                if purchase_limit > 0:
+                    # 获取历史购买数量（不包含当前订单）
+                    all_orders = load_data(ORDERS_FILE)
+                    historical_quantity = 0
+                    for hist_order in all_orders:
+                        if hist_order['user_name'] == user_name and hist_order['order_id'] != order['order_id']:
+                            for item in hist_order.get('items', []):
+                                if item.get('product_id') == selected_product['id']:
+                                    historical_quantity += item.get('quantity', 0)
+                    
+                    # 计算添加后的总数量
+                    final_quantity = historical_quantity + current_quantity_in_order + add_quantity
+                    
+                    if final_quantity > purchase_limit:
+                        st.error(f"⚠️ 商品【{selected_product['name']}】限购{purchase_limit}件\n"
+                                f"您历史已购：{historical_quantity}件\n"
+                                f"当前订单中：{current_quantity_in_order}件\n"
+                                f"本次要添加：{add_quantity}件\n"
+                                f"总计：{final_quantity}件，超出限购数量！")
+                        return
+                
+                # 通过限购检查，添加商品
                 if existing_item:
                     existing_item['quantity'] += add_quantity
                 else:
@@ -1148,7 +1733,7 @@ def modify_order_interface(order, inventory):
                 st.balloons()  # 添加视觉反馈
                 safe_rerun()
         
-        # 显示当前修改后的商品列表
+        # 显示当前修改后的商品列表和支付选项
         if f'modified_items_{order["order_id"]}' in st.session_state:
             st.write("---")
             st.write("**当前订单商品列表:**")
@@ -1174,9 +1759,147 @@ def modify_order_interface(order, inventory):
                         subtotal = item['price'] * item['quantity']
                         st.write(f"¥{subtotal:.2f}")
                 
-                # 计算新的总金额
-                new_total = sum(item['price'] * item['quantity'] for item in modified_items)
-                st.write(f"**当前总金额:** ¥{new_total:.2f}")
+                # 计算价格信息
+                total_items = sum(item['quantity'] for item in modified_items)
+                original_total = sum(item['price'] * item['quantity'] for item in modified_items)
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**商品原价:** ¥{original_total:.2f}")
+                    st.write(f"**商品总件数:** {total_items} 件")
+                
+                # 重新设置支付方式
+                st.write("**重新设置支付方式:**")
+                st.info("💡 **现金折扣优惠:** 全现金支付享受阶梯折扣！")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    new_cash = st.number_input(
+                        "现金支付金额", 
+                        min_value=0.0, 
+                        value=0.0, 
+                        step=0.01, 
+                        format="%.2f", 
+                        key=f"new_cash_tab2_{order['order_id']}"
+                    )
+                with col2:
+                    new_voucher = st.number_input(
+                        "内购券支付金额", 
+                        min_value=0.0, 
+                        value=0.0, 
+                        step=0.01, 
+                        format="%.2f", 
+                        key=f"new_voucher_tab2_{order['order_id']}"
+                    )
+                
+                # 计算折扣逻辑
+                if new_voucher > 0:
+                    # 有内购券支付，不享受折扣
+                    discount_rate = 1.0
+                    discount_text = "使用内购券，无折扣"
+                    discount_amount = 0
+                    final_total = original_total
+                    st.info("🔸 使用内购券支付，按原价结算")
+                else:
+                    # 全现金支付，享受阶梯折扣
+                    if total_items >= 3:
+                        discount_rate = 0.75  # 75折
+                        discount_text = "全现金支付 - 3件及以上75折"
+                    elif total_items == 2:
+                        discount_rate = 0.8   # 8折
+                        discount_text = "全现金支付 - 2件8折"
+                    elif total_items == 1:
+                        discount_rate = 0.85  # 85折
+                        discount_text = "全现金支付 - 1件85折"
+                    else:
+                        discount_rate = 1.0
+                        discount_text = "无商品"
+                    
+                    discount_amount = original_total * (1 - discount_rate)
+                    final_total = original_total - discount_amount
+                    
+                    if discount_rate < 1.0:
+                        st.success(f"🎉 {discount_text}，优惠¥{discount_amount:.2f}")
+                
+                # 计算全现金支付金额（享受折扣后的金额）
+                cash_only_amount = original_total * (0.75 if total_items >= 3 else 0.8 if total_items == 2 else 0.85 if total_items == 1 else 1.0)
+                
+                with col2:
+                    st.write(f"**折扣说明:** {discount_text}")
+                    if discount_amount > 0:
+                        st.write(f"**优惠金额:** -¥{discount_amount:.2f}")
+                    
+                    # 区分显示两种金额
+                    if new_voucher > 0:
+                        # 有内购券时，应付金额是原价，全现金支付金额是折扣价
+                        st.write(f"**应付金额:** ¥{final_total:.2f}")
+                        st.write(f"**全现金支付金额:** ¥{cash_only_amount:.2f}")
+                    else:
+                        # 全现金支付时，显示折扣后的金额
+                        st.write(f"**应付金额:** ¥{final_total:.2f}")
+                        if discount_rate < 1.0:
+                            st.write(f"**（已享受折扣）**")
+                
+                # 检查支付金额
+                total_payment = new_cash + new_voucher
+                if total_payment < final_total:
+                    st.error(f"⚠️ 支付金额不足！应付：¥{final_total:.2f}，实付：¥{total_payment:.2f}")
+                    payment_valid = False
+                else:
+                    if total_payment > final_total:
+                        overpay = total_payment - final_total
+                        st.info(f"💰 多付金额：¥{overpay:.2f}（不设找零）")
+                    st.success(f"✅ 支付金额确认：¥{total_payment:.2f}")
+                    payment_valid = True
+                
+                # 确认修改按钮
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("确认修改", key=f"confirm_modify_tab2_{order['order_id']}", disabled=not payment_valid or not modified_items):
+                        # 限购校验
+                        limit_error = False
+                        for item in modified_items:
+                            for product in inventory:
+                                if product.get('id') == item['product_id']:
+                                    purchase_limit = product.get('purchase_limit', 0)
+                                    if purchase_limit > 0:
+                                        # 获取历史购买数量（不包含当前订单）
+                                        all_orders = load_data(ORDERS_FILE)
+                                        historical_quantity = 0
+                                        for hist_order in all_orders:
+                                            if hist_order['user_name'] == user_name and hist_order['order_id'] != order['order_id']:
+                                                for hist_item in hist_order.get('items', []):
+                                                    if hist_item.get('product_id') == item['product_id']:
+                                                        historical_quantity += hist_item.get('quantity', 0)
+                                        
+                                        if item['quantity'] + historical_quantity > purchase_limit:
+                                            st.error(f"商品【{item['product_name']}】限购{purchase_limit}件，您已购{historical_quantity}件，本次修改后共{item['quantity']+historical_quantity}件，超出限购！")
+                                            limit_error = True
+                                    break
+                        
+                        if limit_error:
+                            return
+                        
+                        if update_order(order, modified_items, new_cash, new_voucher, final_total, discount_rate, discount_text, discount_amount, inventory):
+                            st.success("订单修改成功！")
+                            if f'modified_items_{order["order_id"]}' in st.session_state:
+                                del st.session_state[f'modified_items_{order["order_id"]}']
+                            if 'modifying_order' in st.session_state:
+                                del st.session_state['modifying_order']
+                            st.balloons()
+                            safe_rerun()
+                        else:
+                            st.error("订单修改失败，请重试")
+                
+                with col2:
+                    if st.button("取消修改", key=f"cancel_modify_tab2_{order['order_id']}"):
+                        # 清理临时状态
+                        if f'modified_items_{order["order_id"]}' in st.session_state:
+                            del st.session_state[f'modified_items_{order["order_id"]}']
+                        if 'modifying_order' in st.session_state:
+                            del st.session_state['modifying_order']
+                        st.info("已取消修改")
+                        safe_rerun()
             else:
                 st.write("暂无商品")
         else:
@@ -1228,89 +1951,85 @@ def modify_order_interface(order, inventory):
                 else:
                     st.error("订单撤销失败，请重试")
 
-@ultimate_error_handler
-def update_order(original_order, modified_items, new_cash, new_voucher, new_total, inventory):
-    """更新订单信息"""
-    try:
-        # 加载当前订单数据
-        orders = load_data(ORDERS_FILE)
+# 添加限购检查功能
+        st.write("### 🔍 限购检查")
+        col1, col2 = st.columns(2)
         
-        # 找到要修改的订单
-        order_to_update = None
-        for order in orders:
-            if order['order_id'] == original_order['order_id']:
-                order_to_update = order
-                break
+        with col1:
+            # 按用户查看购买历史
+            users = load_data(USERS_FILE)
+            user_names = [user['name'] for user in users]
+            if user_names:
+                selected_user = st.selectbox("选择用户查看购买历史", user_names, key="check_user_history")
+                
+                if selected_user:
+                    st.write(f"**{selected_user} 的购买历史:**")
+                    inventory = load_data(INVENTORY_FILE)
+                    user_purchase_summary = []
+                    
+                    for product in inventory:
+                        purchased_qty = get_user_purchase_history(selected_user, product['id'])
+                        if purchased_qty > 0:
+                            purchase_limit = product.get('purchase_limit', 0)
+                            status = "正常"
+                            if purchase_limit > 0:
+                                if purchased_qty > purchase_limit:
+                                    status = f"⚠️ 超限 (限购{purchase_limit}件)"
+                                elif purchased_qty == purchase_limit:
+                                    status = f"已满 (限购{purchase_limit}件)"
+                                else:
+                                    status = f"正常 (限购{purchase_limit}件，还可购{purchase_limit-purchased_qty}件)"
+                            
+                            user_purchase_summary.append({
+                                '商品名称': product['name'],
+                                '已购数量': purchased_qty,
+                                '限购状态': status
+                            })
+                    
+                    if user_purchase_summary:
+                        summary_df = pd.DataFrame(user_purchase_summary)
+                        st.dataframe(summary_df, use_container_width=True)
+                    else:
+                        st.info(f"{selected_user} 暂无购买记录")
         
-        if not order_to_update:
-            return False
-        
-        # 计算库存变化
-        # 首先恢复原订单的库存
-        for item in original_order['items']:
-            for product in inventory:
-                if product['id'] == item['product_id']:
-                    product['stock'] += item['quantity']
-                    break
-        
-        # 然后扣减新订单的库存
-        for item in modified_items:
-            for product in inventory:
-                if product['id'] == item['product_id']:
-                    product['stock'] -= item['quantity']
-                    break
-        
-        # 更新订单信息
-        order_to_update['items'] = modified_items
-        order_to_update['total_amount'] = new_total  # 订单商品总额
-        order_to_update['cash_amount'] = new_cash  # 实际现金支付金额
-        order_to_update['voucher_amount'] = new_voucher  # 实际内购券支付金额
-        order_to_update['actual_payment'] = new_cash + new_voucher  # 实际支付总金额
-        
-        # 更新支付方式
-        if new_cash > 0 and new_voucher > 0:
-            order_to_update['payment_method'] = "混合支付"
-        elif new_cash > 0:
-            order_to_update['payment_method'] = "现金支付"
-        elif new_voucher > 0:
-            order_to_update['payment_method'] = "内购券支付"
-        
-        # 添加修改时间
-        order_to_update['modified_time'] = datetime.now().isoformat()
-        
-        # 保存数据
-        save_data(ORDERS_FILE, orders)
-        save_data(INVENTORY_FILE, inventory)
-        
-        return True
-    except Exception as e:
-        st.error(f"更新订单时发生错误：{str(e)}")
-        return False
-
-def cancel_order(order, inventory):
-    """撤销订单"""
-    try:
-        # 加载当前订单数据
-        orders = load_data(ORDERS_FILE)
-        
-        # 恢复库存
-        for item in order['items']:
-            for product in inventory:
-                if product['id'] == item['product_id']:
-                    product['stock'] += item['quantity']
-                    break
-        
-        # 删除订单
-        orders = [o for o in orders if o['order_id'] != order['order_id']]
-        
-        # 保存数据
-        save_data(ORDERS_FILE, orders)
-        save_data(INVENTORY_FILE, inventory)
-        
-        return True
-    except Exception as e:
-        st.error(f"撤销订单时发生错误：{str(e)}")
-        return False
+        with col2:
+            # 按商品查看限购情况
+            inventory = load_data(INVENTORY_FILE)
+            limited_products = [p for p in inventory if p.get('purchase_limit', 0) > 0]
+            
+            if limited_products:
+                product_names = [f"{p['name']} (限购{p['purchase_limit']}件)" for p in limited_products]
+                selected_product_idx = st.selectbox("选择限购商品查看购买情况", range(len(product_names)), format_func=lambda x: product_names[x], key="check_product_limit")
+                
+                if selected_product_idx is not None:
+                    selected_product = limited_products[selected_product_idx]
+                    st.write(f"**{selected_product['name']} 的购买情况:**")
+                    
+                    # 统计所有用户对该商品的购买情况
+                    product_purchase_summary = []
+                    for user in users:
+                        purchased_qty = get_user_purchase_history(user['name'], selected_product['id'])
+                        if purchased_qty > 0:
+                            purchase_limit = selected_product['purchase_limit']
+                            status = "正常"
+                            if purchased_qty > purchase_limit:
+                                status = f"⚠️ 超限"
+                            elif purchased_qty == purchase_limit:
+                                status = "已满"
+                            
+                            product_purchase_summary.append({
+                                '用户': user['name'],
+                                '已购数量': purchased_qty,
+                                '状态': status
+                            })
+                    
+                    if product_purchase_summary:
+                        product_df = pd.DataFrame(product_purchase_summary)
+                        st.dataframe(product_df, use_container_width=True)
+                    else:
+                        st.info(f"该商品暂无购买记录")
+            else:
+                st.info("暂无限购商品")
 
 # 简洁的错误隐藏机制（可选）
 st.markdown("""
@@ -1362,6 +2081,103 @@ def main():
         error_keywords = ["removeChild", "Node", "DOM", "JavaScript", "NotFoundError"]
         if not any(keyword in str(e) for keyword in error_keywords):
             st.error(f"系统错误: {str(e)}")
+
+def update_order(order, modified_items, new_cash, new_voucher, final_total, discount_rate, discount_text, discount_amount, inventory):
+    try:
+        # 恢复旧库存
+        for item in order['items']:
+            for product in inventory:
+                if product['id'] == item['product_id']:
+                    product['stock'] += item['quantity']
+                    break
+        
+        # 重新计算修改后的商品原价总额
+        new_original_amount = sum(item['price'] * item['quantity'] for item in modified_items)
+        
+        # 更新订单内容
+        order['items'] = modified_items.copy()
+        order['original_amount'] = new_original_amount  # 更新商品原价总额
+        order['cash_amount'] = new_cash
+        order['voucher_amount'] = new_voucher
+        order['total_amount'] = final_total
+        order['discount_rate'] = discount_rate
+        order['discount_text'] = discount_text
+        order['discount_savings'] = discount_amount
+        
+        # 重新计算商品总件数
+        order['total_items'] = sum(item['quantity'] for item in modified_items)
+        
+        # 确定支付方式
+        if new_cash > 0 and new_voucher > 0:
+            order['payment_method'] = "混合支付"
+        elif new_cash > 0:
+            order['payment_method'] = "现金支付"
+        elif new_voucher > 0:
+            order['payment_method'] = "内购券支付"
+        else:
+            order['payment_method'] = "无支付"
+        
+        # 扣除新库存
+        for item in modified_items:
+            for product in inventory:
+                if product['id'] == item['product_id']:
+                    product['stock'] -= item['quantity']
+                    break
+        # 保存数据
+        orders = load_data(ORDERS_FILE)
+        for idx, o in enumerate(orders):
+            if o['order_id'] == order['order_id']:
+                orders[idx] = order
+                break
+        save_data(ORDERS_FILE, orders)
+        save_data(INVENTORY_FILE, inventory)
+        return True
+    except Exception as e:
+        st.error(f"订单更新失败: {e}")
+        return False
+
+def cancel_order(order, inventory):
+    try:
+        # 恢复库存
+        for item in order['items']:
+            for product in inventory:
+                if product['id'] == item['product_id']:
+                    product['stock'] += item['quantity']
+                    break
+        # 删除订单
+        orders = load_data(ORDERS_FILE)
+        orders = [o for o in orders if o['order_id'] != order['order_id']]
+        save_data(ORDERS_FILE, orders)
+        save_data(INVENTORY_FILE, inventory)
+        return True
+    except Exception as e:
+        st.error(f"订单取消失败: {e}")
+        return False
+
+# 主函数
+def main():
+    """主函数"""
+    # 初始化数据
+    initialize_data()
+    
+    # 检查登录状态
+    if 'user' not in st.session_state:
+        login_page()
+    else:
+        # 侧边栏显示用户信息
+        with st.sidebar:
+            st.write(f"👤 当前用户: {st.session_state.user['name']}")
+            st.write(f"🔖 角色: {st.session_state.user['role']}")
+            
+            if st.button("退出登录"):
+                del st.session_state.user
+                st.rerun()
+        
+        # 根据用户角色显示不同页面
+        if st.session_state.user['role'] == 'admin':
+            admin_page()
+        else:
+            user_page()
 
 if __name__ == "__main__":
     try:
