@@ -2305,12 +2305,25 @@ def update_order(order, modified_items, new_cash, new_voucher, final_total, disc
                     product['stock'] -= item['quantity']
                     break
         # 保存数据
-        orders = get_orders()
-        for idx, o in enumerate(orders):
-            if o['order_id'] == order['order_id']:
-                orders[idx] = order
-                break
-        pass  # Orders are saved individually via add_order
+        # 更新数据库中的订单
+        try:
+            # 导入数据库模型
+            from database import Order
+            
+            # 获取数据库会话
+            session = db.get_session()
+            
+            # 删除旧订单
+            session.query(Order).filter_by(order_id=order['order_id']).delete()
+            session.commit()
+            session.close()
+            
+            # 添加更新后的订单
+            add_order(order)
+            print(f"订单更新成功: {order['order_id']}")
+        except Exception as e:
+            print(f"订单数据库更新失败: {e}")
+        
         save_inventory(inventory)
         return True
     except Exception as e:
@@ -2326,9 +2339,19 @@ def cancel_order(order, inventory):
                     product['stock'] += item['quantity']
                     break
         # 删除订单
-        orders = get_orders()
-        orders = [o for o in orders if o['order_id'] != order['order_id']]
-        pass  # Orders are saved individually via add_order
+        try:
+            # 导入数据库模型
+            from database import Order
+            
+            # 从数据库删除订单
+            session = db.get_session()
+            session.query(Order).filter_by(order_id=order['order_id']).delete()
+            session.commit()
+            session.close()
+            print(f"订单删除成功: {order['order_id']}")
+        except Exception as e:
+            print(f"订单删除失败: {e}")
+        
         save_inventory(inventory)
         return True
     except Exception as e:
