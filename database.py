@@ -5,48 +5,54 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 import streamlit as st
+import uuid
 
 # 数据库配置
 Base = declarative_base()
 
-# 数据库模型定义
+# 用户模型
 class User(Base):
     __tablename__ = 'users'
     
     id = Column(Integer, primary_key=True)
     username = Column(String(50), unique=True, nullable=False)
+    password = Column(String(100), nullable=False)
+    name = Column(String(100), nullable=False)
     role = Column(String(20), default='user')
-    created_at = Column(DateTime, default=datetime.now)
 
+# 商品模型
 class Product(Base):
     __tablename__ = 'products'
     
-    id = Column(Integer, primary_key=True)
+    id = Column(String(50), primary_key=True)  # 使用字符串ID以兼容现有数据
     name = Column(String(200), nullable=False)
     price = Column(Float, nullable=False)
     stock = Column(Integer, default=0)
-    barcode = Column(String(50), unique=True)
-    category = Column(String(100))
+    barcode = Column(String(50))
     description = Column(Text)
-    max_purchase = Column(Integer, default=999999)  # 限购数量
-    created_at = Column(DateTime, default=datetime.now)
+    purchase_limit = Column(Integer, default=0)  # 限购数量，0表示不限购
+    created_at = Column(String(50))  # 存储ISO格式时间字符串
 
+# 订单模型
 class Order(Base):
     __tablename__ = 'orders'
     
     id = Column(Integer, primary_key=True)
     order_id = Column(String(50), unique=True, nullable=False)
-    username = Column(String(50), nullable=False)
-    items = Column(Text)  # JSON格式存储商品列表
-    total_amount = Column(Float, nullable=False)
+    user_name = Column(String(100), nullable=False)
+    items_json = Column(Text, nullable=False)  # JSON格式存储商品列表
     original_amount = Column(Float, nullable=False)
-    discount_amount = Column(Float, default=0)
-    payment_method = Column(String(50))
-    status = Column(String(20), default='pending')
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now)
+    total_items = Column(Integer, nullable=False)
+    discount_rate = Column(Float, nullable=False)
+    discount_text = Column(String(200), nullable=False)
+    discount_savings = Column(Float, nullable=False)
+    total_amount = Column(Float, nullable=False)
+    payment_method = Column(String(50), nullable=False)
+    cash_amount = Column(Float, nullable=False)
+    voucher_amount = Column(Float, nullable=False)
+    order_time = Column(String(50), nullable=False)  # 存储ISO格式时间字符串
 
-# 数据库连接类
+# 数据库连接和操作类
 class DatabaseManager:
     def __init__(self):
         self.engine = None
@@ -61,12 +67,19 @@ class DatabaseManager:
             if not database_url:
                 # 开发环境使用SQLite
                 database_url = 'sqlite:///purchase_system.db'
+            else:
+                # Render PostgreSQL URL 格式修正
+                if database_url.startswith('postgres://'):
+                    database_url = database_url.replace('postgres://', 'postgresql://', 1)
             
             self.engine = create_engine(database_url)
             self.Session = sessionmaker(bind=self.engine)
             
             # 创建表
             Base.metadata.create_all(self.engine)
+            
+            # 初始化管理员用户
+            self.init_admin_user()
             
         except Exception as e:
             st.error(f"数据库连接失败: {e}")
@@ -76,71 +89,193 @@ class DatabaseManager:
         """获取数据库会话"""
         return self.Session()
     
-    def migrate_json_data(self):
-        """从JSON文件迁移数据到数据库"""
+    def init_admin_user(self):
+        """初始化管理员用户"""
         session = self.get_session()
-        
         try:
-            # 迁移用户数据
-            if os.path.exists('users.json'):
-                with open('users.json', 'r', encoding='utf-8') as f:
-                    users_data = json.load(f)
-                
-                for username, user_info in users_data.items():
-                    existing_user = session.query(User).filter_by(username=username).first()
-                    if not existing_user:
-                        user = User(
-                            username=username,
-                            role=user_info.get('role', 'user')
-                        )
-                        session.add(user)
-            
-            # 迁移商品数据
-            if os.path.exists('inventory.json'):
-                with open('inventory.json', 'r', encoding='utf-8') as f:
-                    inventory_data = json.load(f)
-                
-                for item_name, item_info in inventory_data.items():
-                    existing_product = session.query(Product).filter_by(name=item_name).first()
-                    if not existing_product:
-                        product = Product(
-                            name=item_name,
-                            price=item_info.get('price', 0),
-                            stock=item_info.get('stock', 0),
-                            barcode=item_info.get('barcode', ''),
-                            category=item_info.get('category', ''),
-                            description=item_info.get('description', ''),
-                            max_purchase=item_info.get('max_purchase', 999999)
-                        )
-                        session.add(product)
-            
-            # 迁移订单数据
-            if os.path.exists('orders.json'):
-                with open('orders.json', 'r', encoding='utf-8') as f:
-                    orders_data = json.load(f)
-                
-                for order_id, order_info in orders_data.items():
-                    existing_order = session.query(Order).filter_by(order_id=order_id).first()
-                    if not existing_order:
-                        order = Order(
-                            order_id=order_id,
-                            username=order_info.get('username', ''),
-                            items=json.dumps(order_info.get('items', [])),
-                            total_amount=order_info.get('total_amount', 0),
-                            original_amount=order_info.get('original_amount', 0),
-                            discount_amount=order_info.get('discount_amount', 0),
-                            payment_method=order_info.get('payment_method', ''),
-                            status=order_info.get('status', 'completed'),
-                            created_at=datetime.fromisoformat(order_info.get('timestamp', datetime.now().isoformat()))
-                        )
-                        session.add(order)
-            
-            session.commit()
-            st.success("数据迁移完成！")
-            
+            admin_user = session.query(User).filter_by(name="管理员666").first()
+            if not admin_user:
+                admin_user = User(
+                    username="admin666",
+                    password="admin123",
+                    name="管理员666",
+                    role="admin"
+                )
+                session.add(admin_user)
+                session.commit()
         except Exception as e:
             session.rollback()
-            st.error(f"数据迁移失败: {e}")
+        finally:
+            session.close()
+    
+    # 数据操作方法
+    def load_inventory(self):
+        """加载商品数据"""
+        session = self.get_session()
+        try:
+            products = session.query(Product).all()
+            return [
+                {
+                    "id": p.id,
+                    "name": p.name,
+                    "price": p.price,
+                    "stock": p.stock,
+                    "description": p.description or "",
+                    "barcode": p.barcode or "",
+                    "purchase_limit": p.purchase_limit or 0,
+                    "created_at": p.created_at or datetime.now().isoformat()
+                }
+                for p in products
+            ]
+        finally:
+            session.close()
+    
+    def save_inventory(self, inventory_data):
+        """保存商品数据"""
+        session = self.get_session()
+        try:
+            # 更新现有商品或添加新商品
+            for item in inventory_data:
+                product = session.query(Product).filter_by(id=item["id"]).first()
+                if product:
+                    # 更新现有商品
+                    product.name = item["name"]
+                    product.price = item["price"]
+                    product.stock = item["stock"]
+                    product.description = item.get("description", "")
+                    product.barcode = item.get("barcode", "")
+                    product.purchase_limit = item.get("purchase_limit", 0)
+                    product.created_at = item.get("created_at", datetime.now().isoformat())
+                else:
+                    # 添加新商品
+                    product = Product(
+                        id=item.get("id", str(uuid.uuid4())[:8]),
+                        name=item["name"],
+                        price=item["price"],
+                        stock=item["stock"],
+                        description=item.get("description", ""),
+                        barcode=item.get("barcode", ""),
+                        purchase_limit=item.get("purchase_limit", 0),
+                        created_at=item.get("created_at", datetime.now().isoformat())
+                    )
+                    session.add(product)
+            
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+    
+    def load_orders(self):
+        """加载订单数据"""
+        session = self.get_session()
+        try:
+            orders = session.query(Order).all()
+            return [
+                {
+                    "order_id": o.order_id,
+                    "user_name": o.user_name,
+                    "items": json.loads(o.items_json),
+                    "original_amount": o.original_amount,
+                    "total_items": o.total_items,
+                    "discount_rate": o.discount_rate,
+                    "discount_text": o.discount_text,
+                    "discount_savings": o.discount_savings,
+                    "total_amount": o.total_amount,
+                    "payment_method": o.payment_method,
+                    "cash_amount": o.cash_amount,
+                    "voucher_amount": o.voucher_amount,
+                    "order_time": o.order_time
+                }
+                for o in orders
+            ]
+        finally:
+            session.close()
+    
+    def add_order(self, order_data):
+        """添加订单"""
+        session = self.get_session()
+        try:
+            order = Order(
+                order_id=order_data["order_id"],
+                user_name=order_data["user_name"],
+                items_json=json.dumps(order_data["items"]),
+                original_amount=order_data["original_amount"],
+                total_items=order_data["total_items"],
+                discount_rate=order_data["discount_rate"],
+                discount_text=order_data["discount_text"],
+                discount_savings=order_data["discount_savings"],
+                total_amount=order_data["total_amount"],
+                payment_method=order_data["payment_method"],
+                cash_amount=order_data["cash_amount"],
+                voucher_amount=order_data["voucher_amount"],
+                order_time=order_data["order_time"]
+            )
+            session.add(order)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+    
+    def load_users(self):
+        """加载用户数据"""
+        session = self.get_session()
+        try:
+            users = session.query(User).all()
+            return [
+                {
+                    "username": u.username,
+                    "password": u.password,
+                    "name": u.name,
+                    "role": u.role
+                }
+                for u in users
+            ]
+        finally:
+            session.close()
+    
+    def add_user(self, user_data):
+        """添加用户"""
+        session = self.get_session()
+        try:
+            user = User(
+                username=user_data["username"],
+                password=user_data["password"],
+                name=user_data["name"],
+                role=user_data["role"]
+            )
+            session.add(user)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+    
+    def clear_orders(self):
+        """清空所有订单"""
+        session = self.get_session()
+        try:
+            session.query(Order).delete()
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+    
+    def clear_inventory(self):
+        """清空所有商品"""
+        session = self.get_session()
+        try:
+            session.query(Product).delete()
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            raise e
         finally:
             session.close()
 

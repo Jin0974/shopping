@@ -1,12 +1,12 @@
 import streamlit as st
 import pandas as pd
-import json
 import os
 import time
 import contextlib
 import io
 from datetime import datetime
 import uuid
+from database import get_database_manager
 
 # 设置页面配置
 st.set_page_config(
@@ -18,10 +18,12 @@ st.set_page_config(
 
 # 清理完成 - 所有JavaScript残留代码已移除
 
-# 数据文件路径
-INVENTORY_FILE = "inventory.json"
-ORDERS_FILE = "orders.json"
-USERS_FILE = "users.json"
+# 获取数据库管理器（使用缓存避免重复初始化）
+@st.cache_resource
+def get_db():
+    return get_database_manager()
+
+db = get_db()
 
 # 错误处理装饰器
 def handle_frontend_errors(func):
@@ -115,44 +117,57 @@ def smooth_remove_items(items_list, indices_to_remove):
         # 如果出错，返回原列表
         return items_list
 
-# 初始化数据文件
+# 数据操作函数（直接使用数据库）
+def get_users():
+    """获取用户数据"""
+    return db.load_users()
+
+def get_orders():
+    """获取订单数据"""
+    return db.load_orders()
+
+def get_inventory():
+    """获取库存数据"""
+    return db.load_inventory()
+
+def save_inventory(inventory_data):
+    """保存库存数据"""
+    db.save_inventory(inventory_data)
+
+def add_order(order_data):
+    """添加订单"""
+    db.add_order(order_data)
+
+def add_user(user_data):
+    """添加用户"""
+    db.add_user(user_data)
+
+def save_users(users_data):
+    """保存用户数据"""
+    for user in users_data:
+        db.add_user(user)
+
+def clear_orders():
+    """清空订单"""
+    db.clear_orders()
+
+def clear_users():
+    """清空用户"""
+    db.clear_users()
+
+def clear_inventory():
+    """清空库存"""
+    db.save_inventory([])
+
+# 初始化数据（数据库已自动初始化）
 def initialize_data():
-    """初始化数据文件"""
-    if not os.path.exists(INVENTORY_FILE):
-        with open(INVENTORY_FILE, 'w', encoding='utf-8') as f:
-            json.dump([], f, ensure_ascii=False, indent=2)
-    
-    if not os.path.exists(ORDERS_FILE):
-        with open(ORDERS_FILE, 'w', encoding='utf-8') as f:
-            json.dump([], f, ensure_ascii=False, indent=2)
-    
-    if not os.path.exists(USERS_FILE):
-        # 创建默认管理员
-        default_users = [
-            {"username": "admin", "password": "admin123", "role": "admin", "name": "管理员"}
-        ]
-        with open(USERS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(default_users, f, ensure_ascii=False, indent=2)
-
-# 加载数据
-def load_data(file_path):
-    """加载JSON数据"""
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except:
-        return []
-
-# 保存数据
-def save_data(file_path, data):
-    """保存JSON数据"""
-    with open(file_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    """初始化数据（数据库版本）"""
+    pass  # 数据库会自动初始化
 
 # 用户认证
 def authenticate_user(name):
     """用户认证"""
-    users = load_data(USERS_FILE)
+    users = get_users()
     # 只有输入“管理员666”才允许进入管理员界面
     if name == "管理员666":
         # 检查是否已存在管理员666
@@ -166,8 +181,7 @@ def authenticate_user(name):
             "name": "管理员666",
             "role": "admin"
         }
-        users.append(admin_user)
-        save_data(USERS_FILE, users)
+        add_user(admin_user)
         return admin_user
     # 其它任何姓名都只能是普通用户
     for user in users:
@@ -179,14 +193,13 @@ def authenticate_user(name):
         "name": name,
         "role": "user"
     }
-    users.append(new_user)
-    save_data(USERS_FILE, users)
+    add_user(new_user)
     return new_user
 
 # 检查用户历史购买数量
 def get_user_purchase_history(user_name, product_id):
     """获取用户对特定商品的历史购买数量"""
-    orders = load_data(ORDERS_FILE)
+    orders = get_orders()
     total_purchased = 0
     
     for order in orders:
@@ -269,10 +282,10 @@ def admin_page():
 def inventory_management():
     """库存管理"""
     
-    inventory = load_data(INVENTORY_FILE)
+    inventory = get_inventory()
     if inventory:
         # 计算销售数据
-        orders = load_data(ORDERS_FILE)
+        orders = get_orders()
         sales_data = {}
         
         # 统计每个商品的销售数量
@@ -489,7 +502,7 @@ def inventory_management():
                         inventory[i]['stock'] = new_stock
                         changed = True
             if changed:
-                save_data(INVENTORY_FILE, inventory)
+                save_inventory(inventory)
                 st.success("✅ 商品信息已更新！")
                 st.rerun()
         except Exception as e:
@@ -565,7 +578,7 @@ def inventory_management():
                             st.warning(f"跳过无效行: {e}")
                     
                     if success_count > 0:
-                        save_data(INVENTORY_FILE, inventory)
+                        save_inventory(inventory)
                         st.success(f"✅ 成功导入 {success_count} 个商品！")
                         st.rerun()
                     else:
@@ -581,7 +594,7 @@ def inventory_management():
                 col_yes, col_no = st.columns(2)
                 with col_yes:
                     if st.button("✅ 确认清空", type="primary"):
-                        save_data(INVENTORY_FILE, [])
+                        clear_inventory()
                         st.session_state.confirm_clear_all = False
                         st.success("✅ 所有库存已清空！")
                         st.rerun()
@@ -683,7 +696,7 @@ def inventory_management():
                         st.warning(f"跳过无效行: {e}")
                 
                 if success_count > 0:
-                    save_data(INVENTORY_FILE, inventory)
+                    save_inventory(inventory)
                     st.success(f"✅ 成功导入 {success_count} 个商品！")
                     st.rerun()
                 else:
@@ -697,7 +710,7 @@ def order_management():
     """订单管理"""
     st.subheader("📋 订单管理")
     
-    orders = load_data(ORDERS_FILE)
+    orders = get_orders()
     
     if orders:
         # 计算统计数据 - 兼容新旧订单格式
@@ -722,7 +735,7 @@ def order_management():
         
         # 处理订单数据，展开商品信息
         order_details = []
-        inventory = load_data(INVENTORY_FILE)  # 加载商品数据来获取条码
+        inventory = get_inventory()  # 加载商品数据来获取条码
         
         for order in orders:
             items = order.get('items', [])
@@ -798,7 +811,7 @@ def order_management():
             with col2:
                 if st.button("🗑️ 清空所有订单"):
                     if st.session_state.get('confirm_clear_orders', False):
-                        save_data(ORDERS_FILE, [])
+                        clear_orders()
                         st.session_state.confirm_clear_orders = False
                         st.success("✅ 所有订单已清空！")
                         st.rerun()
@@ -815,7 +828,7 @@ def user_management():
     """用户管理"""
     st.subheader("👥 用户管理")
     
-    users = load_data(USERS_FILE)
+    users = get_users()
     
     # 添加用户
     with st.form("add_user_form"):
@@ -838,8 +851,7 @@ def user_management():
                         "name": new_name,
                         "role": new_role
                     }
-                    users.append(new_user)
-                    save_data(USERS_FILE, users)
+                    add_user(new_user)
                     st.success("用户添加成功！")
                     st.rerun()
             else:
@@ -852,7 +864,7 @@ def user_management():
             if st.button(f"删除用户", key=f"delete_user_{i}"):
                 if user['username'] != 'admin':  # 保护管理员账户
                     users.pop(i)
-                    save_data(USERS_FILE, users)
+                    save_users(users)
                     st.success("用户删除成功！")
                     st.rerun()
                 else:
@@ -863,8 +875,8 @@ def data_statistics():
     """数据统计"""
     st.subheader("📊 数据统计")
     
-    orders = load_data(ORDERS_FILE)
-    inventory = load_data(INVENTORY_FILE)
+    orders = get_orders()
+    inventory = get_inventory()
     
     if orders:
         df = pd.DataFrame(orders)
@@ -946,7 +958,7 @@ def user_page():
 
 def shopping_page():
     """商品购买页面"""
-    inventory = load_data(INVENTORY_FILE)
+    inventory = get_inventory()
     
     if not inventory:
         st.info("暂无商品可购买")
@@ -1223,7 +1235,7 @@ def shopping_page():
 def cart_page():
     """购物车页面"""
     st.title("🛒 我的购物车")
-    inventory = load_data(INVENTORY_FILE)
+    inventory = get_inventory()
     if 'cart' not in st.session_state:
         st.session_state.cart = []
     cart = st.session_state.cart
@@ -1386,7 +1398,7 @@ def cart_page():
     else:
         payment_method = "无支付"
     if st.button("提交订单", disabled=not payment_valid):
-        inventory = load_data(INVENTORY_FILE)
+        inventory = get_inventory()
         can_order = True
         user_name = st.session_state.user['name']
         # 只统计本次订单的商品和金额
@@ -1450,15 +1462,15 @@ def cart_page():
                 'voucher_amount': voucher_amount,
                 'order_time': datetime.now().isoformat()
             }
-            orders = load_data(ORDERS_FILE)
-            orders.append(order)
-            save_data(ORDERS_FILE, orders)
+            orders = get_orders()
+            add_order(order)
+            pass  # Orders are saved individually via add_order
             for cart_item in order_items:
                 for product in inventory:
                     if product['id'] == cart_item['product_id']:
                         product['stock'] -= cart_item['quantity']
                         break
-            save_data(INVENTORY_FILE, inventory)
+            save_inventory(inventory)
             st.session_state.cart = []
             st.success("订单提交成功！")
             st.rerun()
@@ -1468,8 +1480,8 @@ def user_order_history():
     st.subheader("📋 订单历史")
     
     # 加载订单和库存数据
-    orders = load_data(ORDERS_FILE)
-    inventory = load_data(INVENTORY_FILE)
+    orders = get_orders()
+    inventory = get_inventory()
     
     # 筛选当前用户的订单
     user_orders = [order for order in orders if order['user_name'] == st.session_state.user['name']]
@@ -1755,7 +1767,7 @@ def modify_order_interface(order, inventory):
                             purchase_limit = product.get('purchase_limit', 0)
                             if purchase_limit > 0:
                                 # 获取历史购买数量（不包含当前订单）
-                                all_orders = load_data(ORDERS_FILE)
+                                all_orders = get_orders()
                                 historical_quantity = 0
                                 for hist_order in all_orders:
                                     if hist_order['user_name'] == user_name and hist_order['order_id'] != order['order_id']:
@@ -1810,7 +1822,7 @@ def modify_order_interface(order, inventory):
             
             if purchase_limit > 0:
                 # 获取历史购买数量（不包含当前订单）
-                all_orders = load_data(ORDERS_FILE)
+                all_orders = get_orders()
                 historical_quantity = 0
                 for hist_order in all_orders:
                     if hist_order['user_name'] == user_name and hist_order['order_id'] != order['order_id']:
@@ -1867,7 +1879,7 @@ def modify_order_interface(order, inventory):
                 
                 if purchase_limit > 0:
                     # 获取历史购买数量（不包含当前订单）
-                    all_orders = load_data(ORDERS_FILE)
+                    all_orders = get_orders()
                     historical_quantity = 0
                     for hist_order in all_orders:
                         if hist_order['user_name'] == user_name and hist_order['order_id'] != order['order_id']:
@@ -2033,7 +2045,7 @@ def modify_order_interface(order, inventory):
                                     purchase_limit = product.get('purchase_limit', 0)
                                     if purchase_limit > 0:
                                         # 获取历史购买数量（不包含当前订单）
-                                        all_orders = load_data(ORDERS_FILE)
+                                        all_orders = get_orders()
                                         historical_quantity = 0
                                         for hist_order in all_orders:
                                             if hist_order['user_name'] == user_name and hist_order['order_id'] != order['order_id']:
@@ -2126,14 +2138,14 @@ def modify_order_interface(order, inventory):
         
         with col1:
             # 按用户查看购买历史
-            users = load_data(USERS_FILE)
+            users = get_users()
             user_names = [user['name'] for user in users]
             if user_names:
                 selected_user = st.selectbox("选择用户查看购买历史", user_names, key="check_user_history")
                 
                 if selected_user:
                     st.write(f"**{selected_user} 的购买历史:**")
-                    inventory = load_data(INVENTORY_FILE)
+                    inventory = get_inventory()
                     user_purchase_summary = []
                     
                     for product in inventory:
@@ -2163,7 +2175,7 @@ def modify_order_interface(order, inventory):
         
         with col2:
             # 按商品查看限购情况
-            inventory = load_data(INVENTORY_FILE)
+            inventory = get_inventory()
             limited_products = [p for p in inventory if p.get('purchase_limit', 0) > 0]
             
             if limited_products:
@@ -2293,13 +2305,13 @@ def update_order(order, modified_items, new_cash, new_voucher, final_total, disc
                     product['stock'] -= item['quantity']
                     break
         # 保存数据
-        orders = load_data(ORDERS_FILE)
+        orders = get_orders()
         for idx, o in enumerate(orders):
             if o['order_id'] == order['order_id']:
                 orders[idx] = order
                 break
-        save_data(ORDERS_FILE, orders)
-        save_data(INVENTORY_FILE, inventory)
+        pass  # Orders are saved individually via add_order
+        save_inventory(inventory)
         return True
     except Exception as e:
         st.error(f"订单更新失败: {e}")
@@ -2314,10 +2326,10 @@ def cancel_order(order, inventory):
                     product['stock'] += item['quantity']
                     break
         # 删除订单
-        orders = load_data(ORDERS_FILE)
+        orders = get_orders()
         orders = [o for o in orders if o['order_id'] != order['order_id']]
-        save_data(ORDERS_FILE, orders)
-        save_data(INVENTORY_FILE, inventory)
+        pass  # Orders are saved individually via add_order
+        save_inventory(inventory)
         return True
     except Exception as e:
         st.error(f"订单取消失败: {e}")
