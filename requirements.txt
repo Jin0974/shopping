@@ -2,3 +2,7 @@ streamlit>=1.28.0
 pandas>=1.5.0
 openpyxl>=3.0.0
 python-dateutil>=2.8.0
+# 数据库依赖
+sqlalchemy>=1.4.0
+psycopg2-binary>=2.9.0
+alembic>=1.8.0

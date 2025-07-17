@@ -1,0 +1,27 @@
+[server]
+# 最大上传文件大小
+maxUploadSize = 200
+
+# 启用跨域资源共享
+enableCORS = false
+
+# 启用静态文件服务
+enableStaticServing = true
+
+[browser]
+# 收集使用统计
+gatherUsageStats = false
+
+[theme]
+# 主题颜色
+primaryColor = "#FF6B6B"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#262730"
+
+[client]
+# 显示错误详情
+showErrorDetails = false
+
+# 工具栏模式
+toolbarMode = "minimal"

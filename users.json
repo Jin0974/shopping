@@ -22,5 +22,17 @@
     "password": "default123",
     "name": "菲",
     "role": "user"
+  },
+  {
+    "username": "user_4",
+    "password": "default123",
+    "name": "管理员",
+    "role": "user"
+  },
+  {
+    "username": "admin666",
+    "password": "admin123",
+    "name": "管理员666",
+    "role": "admin"
   }
 ]
