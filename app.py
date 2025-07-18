@@ -18,12 +18,21 @@ st.set_page_config(
 
 # 清理完成 - 所有JavaScript残留代码已移除
 
-# 获取数据库管理器（使用缓存避免重复初始化）
-@st.cache_resource
+# 获取数据库管理器（移除缓存，确保连接正常）
 def get_db():
     return get_database_manager()
 
-db = get_db()
+# 初始化数据库管理器
+if 'database_manager' not in st.session_state:
+    st.session_state.database_manager = get_database_manager()
+    # 测试数据库连接
+    if st.session_state.database_manager.test_connection():
+        print("🎉 数据库连接和表结构验证成功!")
+    else:
+        print("⚠️  数据库连接存在问题!")
+        st.error("数据库连接失败，请检查配置")
+    
+db = st.session_state.database_manager
 
 # 错误处理装饰器
 def handle_frontend_errors(func):
@@ -1463,8 +1472,28 @@ def cart_page():
                 'order_time': datetime.now().isoformat()
             }
             orders = get_orders()
-            add_order(order)
-            pass  # Orders are saved individually via add_order
+            
+            # 添加订单到数据库
+            try:
+                add_order(order)
+                print(f"✅ 订单提交: {order['order_id']}")
+                
+                # 立即验证订单是否保存成功
+                saved_orders = get_orders()
+                order_saved = any(o['order_id'] == order['order_id'] for o in saved_orders)
+                if order_saved:
+                    print(f"✅ 订单验证成功: {order['order_id']} 已保存到数据库")
+                else:
+                    print(f"❌ 订单验证失败: {order['order_id']} 未找到在数据库中")
+                    st.error("订单保存验证失败！请联系管理员。")
+                    return
+                    
+            except Exception as e:
+                print(f"❌ 订单保存异常: {e}")
+                st.error(f"订单保存失败: {str(e)}")
+                return
+            
+            # 更新库存
             for cart_item in order_items:
                 for product in inventory:
                     if product['id'] == cart_item['product_id']:
@@ -2234,9 +2263,16 @@ def main():
     # 初始化数据
     initialize_data()
     
-    # 侧边栏
+    # 在侧边栏显示数据库状态
     with st.sidebar:
         st.title("🏪 内购系统")
+        
+        # 显示数据库连接状态
+        database_url = os.getenv('DATABASE_URL')
+        if database_url:
+            st.success("🗄️ PostgreSQL 已连接")
+        else:
+            st.warning("🗄️ 使用本地 SQLite")
         
         if 'user' not in st.session_state:
             st.write("请先登录")
