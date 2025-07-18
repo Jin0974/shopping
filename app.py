@@ -135,11 +135,29 @@ def get_inventory():
 
 def save_inventory(inventory_data):
     """保存库存数据"""
-    db.save_inventory(inventory_data)
+    try:
+        db.save_inventory(inventory_data)
+        print(f"✅ 库存保存成功: {len(inventory_data)} 个商品")
+    except Exception as e:
+        print(f"❌ 库存保存失败: {e}")
+        # 显示错误给用户
+        if 'streamlit' in globals():
+            import streamlit as st
+            st.error(f"库存保存失败: {e}")
+        raise e
 
 def add_order(order_data):
     """添加订单"""
-    db.add_order(order_data)
+    try:
+        db.add_order(order_data)
+        print(f"✅ 订单保存成功: {order_data.get('order_id', 'Unknown')}")
+    except Exception as e:
+        print(f"❌ 订单保存失败: {e}")
+        # 显示错误给用户
+        if 'streamlit' in globals():
+            import streamlit as st
+            st.error(f"订单保存失败: {e}")
+        raise e
 
 def add_user(user_data):
     """添加用户"""
@@ -160,7 +178,13 @@ def clear_users():
 
 def clear_inventory():
     """清空库存"""
-    db.save_inventory([])
+    try:
+        db.clear_inventory()
+        print("✅ 数据库库存清空成功")
+    except Exception as e:
+        print(f"❌ 清空库存失败: {e}")
+        # 如果数据库清空失败，尝试用保存空列表的方式
+        db.save_inventory([])
 
 # 文件常量（兼容性）
 USERS_FILE = "users.json"
@@ -626,10 +650,13 @@ def inventory_management():
                 col_yes, col_no = st.columns(2)
                 with col_yes:
                     if st.button("✅ 确认清空", type="primary"):
-                        save_data(INVENTORY_FILE, [])
-                        st.session_state.confirm_clear_all = False
-                        st.success("✅ 所有库存已清空！")
-                        st.rerun()
+                        try:
+                            clear_inventory()
+                            st.session_state.confirm_clear_all = False
+                            st.success("✅ 所有库存已清空！")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 清空失败: {e}")
                 with col_no:
                     if st.button("❌ 取消"):
                         st.session_state.confirm_clear_all = False
