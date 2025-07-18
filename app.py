@@ -24,13 +24,12 @@ def get_db():
 
 # 初始化数据库管理器
 if 'database_manager' not in st.session_state:
-    st.session_state.database_manager = get_database_manager()
-    # 测试数据库连接
-    if st.session_state.database_manager.test_connection():
-        print("🎉 数据库连接和表结构验证成功!")
-    else:
-        print("⚠️  数据库连接存在问题!")
-        st.error("数据库连接失败，请检查配置")
+    try:
+        st.session_state.database_manager = get_database_manager()
+        print("✅ 数据库管理器初始化成功")
+    except Exception as e:
+        print(f"❌ 数据库初始化失败: {e}")
+        st.error(f"数据库连接失败: {str(e)}")
     
 db = st.session_state.database_manager
 

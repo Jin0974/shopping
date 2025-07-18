@@ -64,27 +64,65 @@ class DatabaseManager:
         try:
             # 从环境变量获取数据库URL
             database_url = os.getenv('DATABASE_URL')
+            print(f"🔍 环境变量检查:")
+            print(f"   DATABASE_URL存在: {'是' if database_url else '否'}")
+            
             if not database_url:
                 # 开发环境使用SQLite
                 database_url = 'sqlite:///purchase_system.db'
+                print("⚠️  使用本地SQLite数据库")
             else:
                 # Render PostgreSQL URL 格式修正
                 if database_url.startswith('postgres://'):
                     database_url = database_url.replace('postgres://', 'postgresql://', 1)
+                print("✅ 使用PostgreSQL数据库")
+                print(f"数据库主机: {database_url.split('@')[1].split('/')[0] if '@' in database_url else '未知'}")
             
-            self.engine = create_engine(database_url)
+            # 添加连接池配置
+            self.engine = create_engine(
+                database_url,
+                pool_pre_ping=True,
+                pool_recycle=300,  # 减少连接回收时间到5分钟
+                echo=True  # 开启SQL日志，便于调试
+            )
             self.Session = sessionmaker(bind=self.engine)
             
             # 创建表
             Base.metadata.create_all(self.engine)
+            print("数据库表创建完成")
             
             # 初始化管理员用户
             self.init_admin_user()
+            print("管理员用户初始化完成")
             
         except Exception as e:
-            st.error(f"数据库连接失败: {e}")
+            print(f"数据库连接失败: {e}")
+            # 在Streamlit中也显示错误
+            if 'streamlit' in globals():
+                st.error(f"数据库连接失败: {e}")
             raise e
     
+    def test_connection(self):
+        """测试数据库连接"""
+        try:
+            session = self.get_session()
+            # 尝试查询用户表
+            user_count = session.query(User).count()
+            # 尝试查询订单表
+            order_count = session.query(Order).count()
+            # 尝试查询商品表
+            product_count = session.query(Product).count()
+            session.close()
+            
+            print(f"📊 数据库连接测试成功!")
+            print(f"   - 用户数量: {user_count}")
+            print(f"   - 订单数量: {order_count}")
+            print(f"   - 商品数量: {product_count}")
+            return True
+        except Exception as e:
+            print(f"❌ 数据库连接测试失败: {e}")
+            return False
+
     def get_session(self):
         """获取数据库会话"""
         return self.Session()
@@ -197,6 +235,7 @@ class DatabaseManager:
         """添加订单"""
         session = self.get_session()
         try:
+            print(f"🔄 开始保存订单: {order_data['order_id']}")
             order = Order(
                 order_id=order_data["order_id"],
                 user_name=order_data["user_name"],
@@ -214,8 +253,18 @@ class DatabaseManager:
             )
             session.add(order)
             session.commit()
+            print(f"✅ 订单保存成功: {order_data['order_id']}")
+            
+            # 验证保存
+            saved_order = session.query(Order).filter_by(order_id=order_data['order_id']).first()
+            if saved_order:
+                print(f"✅ 验证成功: 订单 {order_data['order_id']} 已存在于数据库")
+            else:
+                print(f"❌ 验证失败: 订单 {order_data['order_id']} 未找到")
+                
         except Exception as e:
             session.rollback()
+            print(f"❌ 订单保存失败: {e}")
             raise e
         finally:
             session.close()
@@ -279,7 +328,6 @@ class DatabaseManager:
         finally:
             session.close()
 
-# 全局数据库管理器
-@st.cache_resource
+# 全局数据库管理器（移除缓存，确保连接正常）
 def get_database_manager():
     return DatabaseManager()
