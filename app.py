@@ -1381,6 +1381,11 @@ def order_history_page():
                 for item in items:
                     st.write(f"- {item.get('product_name', 'N/A')} × {item.get('quantity', 0)} = ¥{item.get('total_price', 0):.2f}")
 
+# 用户订单历史页面（别名）
+def user_order_history():
+    """用户订单历史页面"""
+    order_history_page()
+
 # 结账处理
 def checkout_order(cart_items, total_amount):
     """处理结账"""
