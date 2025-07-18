@@ -30,8 +30,11 @@ if 'database_manager' not in st.session_state:
     except Exception as e:
         print(f"❌ 数据库初始化失败: {e}")
         st.error(f"数据库连接失败: {str(e)}")
+        # 创建一个空的数据库管理器以避免后续错误
+        st.session_state.database_manager = None
     
-db = st.session_state.database_manager
+# 安全获取数据库管理器
+db = st.session_state.get('database_manager')
 
 # 错误处理装饰器
 def handle_frontend_errors(func):
@@ -128,43 +131,63 @@ def smooth_remove_items(items_list, indices_to_remove):
 # 数据操作函数（直接使用数据库）
 def get_users():
     """获取用户数据"""
+    if db is None:
+        return []
     return db.load_users()
 
 def get_orders():
     """获取订单数据"""
+    if db is None:
+        return []
     return db.load_orders()
 
 def get_inventory():
     """获取库存数据"""
+    if db is None:
+        return []
     return db.load_inventory()
 
 def save_inventory(inventory_data):
     """保存库存数据"""
+    if db is None:
+        return
     db.save_inventory(inventory_data)
 
 def add_order(order_data):
     """添加订单"""
+    if db is None:
+        return
     db.add_order(order_data)
 
 def add_user(user_data):
     """添加用户"""
+    if db is None:
+        return
     db.add_user(user_data)
 
 def save_users(users_data):
     """保存用户数据"""
+    if db is None:
+        return
     for user in users_data:
         db.add_user(user)
 
 def clear_orders():
     """清空订单"""
+    if db is None:
+        return
     db.clear_orders()
 
 def clear_users():
     """清空用户"""
+    if db is None:
+        return
     db.clear_users()
 
 def clear_inventory():
     """清空库存"""
+    if db is None:
+        return
     db.save_inventory([])
 
 # 初始化数据（数据库已自动初始化）

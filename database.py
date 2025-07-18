@@ -102,27 +102,6 @@ class DatabaseManager:
                 st.error(f"数据库连接失败: {e}")
             raise e
     
-    def test_connection(self):
-        """测试数据库连接"""
-        try:
-            session = self.get_session()
-            # 尝试查询用户表
-            user_count = session.query(User).count()
-            # 尝试查询订单表
-            order_count = session.query(Order).count()
-            # 尝试查询商品表
-            product_count = session.query(Product).count()
-            session.close()
-            
-            print(f"📊 数据库连接测试成功!")
-            print(f"   - 用户数量: {user_count}")
-            print(f"   - 订单数量: {order_count}")
-            print(f"   - 商品数量: {product_count}")
-            return True
-        except Exception as e:
-            print(f"❌ 数据库连接测试失败: {e}")
-            return False
-
     def get_session(self):
         """获取数据库会话"""
         return self.Session()
