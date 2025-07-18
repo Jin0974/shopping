@@ -95,6 +95,9 @@ class DatabaseManager:
             self.init_admin_user()
             print("管理员用户初始化完成")
             
+            # 显示连接成功信息
+            print("✅ 数据库连接成功！")
+            
         except Exception as e:
             print(f"数据库连接失败: {e}")
             # 在Streamlit中也显示错误

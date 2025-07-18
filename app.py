@@ -18,23 +18,15 @@ st.set_page_config(
 
 # 清理完成 - 所有JavaScript残留代码已移除
 
-# 获取数据库管理器（移除缓存，确保连接正常）
+# 初始化数据库管理器
+db = get_database_manager()
+
+# 获取数据库管理器
+@st.cache_resource
 def get_db():
     return get_database_manager()
 
-# 初始化数据库管理器
-if 'database_manager' not in st.session_state:
-    try:
-        st.session_state.database_manager = get_database_manager()
-        print("✅ 数据库管理器初始化成功")
-    except Exception as e:
-        print(f"❌ 数据库初始化失败: {e}")
-        st.error(f"数据库连接失败: {str(e)}")
-        # 创建一个空的数据库管理器以避免后续错误
-        st.session_state.database_manager = None
-    
-# 安全获取数据库管理器
-db = st.session_state.get('database_manager')
+db = get_db()
 
 # 错误处理装饰器
 def handle_frontend_errors(func):
@@ -131,64 +123,73 @@ def smooth_remove_items(items_list, indices_to_remove):
 # 数据操作函数（直接使用数据库）
 def get_users():
     """获取用户数据"""
-    if db is None:
-        return []
     return db.load_users()
 
 def get_orders():
     """获取订单数据"""
-    if db is None:
-        return []
     return db.load_orders()
 
 def get_inventory():
     """获取库存数据"""
-    if db is None:
-        return []
     return db.load_inventory()
 
 def save_inventory(inventory_data):
     """保存库存数据"""
-    if db is None:
-        return
     db.save_inventory(inventory_data)
 
 def add_order(order_data):
     """添加订单"""
-    if db is None:
-        return
     db.add_order(order_data)
 
 def add_user(user_data):
     """添加用户"""
-    if db is None:
-        return
     db.add_user(user_data)
 
 def save_users(users_data):
     """保存用户数据"""
-    if db is None:
-        return
     for user in users_data:
         db.add_user(user)
 
 def clear_orders():
     """清空订单"""
-    if db is None:
-        return
     db.clear_orders()
 
 def clear_users():
     """清空用户"""
-    if db is None:
-        return
     db.clear_users()
 
 def clear_inventory():
     """清空库存"""
-    if db is None:
-        return
     db.save_inventory([])
+
+# 文件常量（兼容性）
+USERS_FILE = "users.json"
+ORDERS_FILE = "orders.json"
+INVENTORY_FILE = "inventory.json"
+
+# 兼容性函数（将文件操作转换为数据库操作）
+def load_data(file_path):
+    """加载数据（兼容性函数）"""
+    if file_path == USERS_FILE:
+        return get_users()
+    elif file_path == ORDERS_FILE:
+        return get_orders()
+    elif file_path == INVENTORY_FILE:
+        return get_inventory()
+    else:
+        return []
+
+def save_data(file_path, data):
+    """保存数据（兼容性函数）"""
+    if file_path == USERS_FILE:
+        save_users(data)
+    elif file_path == ORDERS_FILE:
+        # 订单数据需要逐个添加
+        clear_orders()
+        for order in data:
+            add_order(order)
+    elif file_path == INVENTORY_FILE:
+        save_inventory(data)
 
 # 初始化数据（数据库已自动初始化）
 def initialize_data():
@@ -230,7 +231,7 @@ def authenticate_user(name):
 # 检查用户历史购买数量
 def get_user_purchase_history(user_name, product_id):
     """获取用户对特定商品的历史购买数量"""
-    orders = get_orders()
+    orders = load_data(ORDERS_FILE)
     total_purchased = 0
     
     for order in orders:
@@ -313,10 +314,10 @@ def admin_page():
 def inventory_management():
     """库存管理"""
     
-    inventory = get_inventory()
+    inventory = load_data(INVENTORY_FILE)
     if inventory:
         # 计算销售数据
-        orders = get_orders()
+        orders = load_data(ORDERS_FILE)
         sales_data = {}
         
         # 统计每个商品的销售数量
@@ -533,7 +534,7 @@ def inventory_management():
                         inventory[i]['stock'] = new_stock
                         changed = True
             if changed:
-                save_inventory(inventory)
+                save_data(INVENTORY_FILE, inventory)
                 st.success("✅ 商品信息已更新！")
                 st.rerun()
         except Exception as e:
@@ -609,7 +610,7 @@ def inventory_management():
                             st.warning(f"跳过无效行: {e}")
                     
                     if success_count > 0:
-                        save_inventory(inventory)
+                        save_data(INVENTORY_FILE, inventory)
                         st.success(f"✅ 成功导入 {success_count} 个商品！")
                         st.rerun()
                     else:
@@ -625,7 +626,7 @@ def inventory_management():
                 col_yes, col_no = st.columns(2)
                 with col_yes:
                     if st.button("✅ 确认清空", type="primary"):
-                        clear_inventory()
+                        save_data(INVENTORY_FILE, [])
                         st.session_state.confirm_clear_all = False
                         st.success("✅ 所有库存已清空！")
                         st.rerun()
@@ -727,7 +728,7 @@ def inventory_management():
                         st.warning(f"跳过无效行: {e}")
                 
                 if success_count > 0:
-                    save_inventory(inventory)
+                    save_data(INVENTORY_FILE, inventory)
                     st.success(f"✅ 成功导入 {success_count} 个商品！")
                     st.rerun()
                 else:
@@ -741,7 +742,7 @@ def order_management():
     """订单管理"""
     st.subheader("📋 订单管理")
     
-    orders = get_orders()
+    orders = load_data(ORDERS_FILE)
     
     if orders:
         # 计算统计数据 - 兼容新旧订单格式
@@ -766,7 +767,7 @@ def order_management():
         
         # 处理订单数据，展开商品信息
         order_details = []
-        inventory = get_inventory()  # 加载商品数据来获取条码
+        inventory = load_data(INVENTORY_FILE)  # 加载商品数据来获取条码
         
         for order in orders:
             items = order.get('items', [])
@@ -842,7 +843,7 @@ def order_management():
             with col2:
                 if st.button("🗑️ 清空所有订单"):
                     if st.session_state.get('confirm_clear_orders', False):
-                        clear_orders()
+                        save_data(ORDERS_FILE, [])
                         st.session_state.confirm_clear_orders = False
                         st.success("✅ 所有订单已清空！")
                         st.rerun()
@@ -859,7 +860,7 @@ def user_management():
     """用户管理"""
     st.subheader("👥 用户管理")
     
-    users = get_users()
+    users = load_data(USERS_FILE)
     
     # 添加用户
     with st.form("add_user_form"):
@@ -882,7 +883,8 @@ def user_management():
                         "name": new_name,
                         "role": new_role
                     }
-                    add_user(new_user)
+                    users.append(new_user)
+                    save_data(USERS_FILE, users)
                     st.success("用户添加成功！")
                     st.rerun()
             else:
@@ -895,7 +897,7 @@ def user_management():
             if st.button(f"删除用户", key=f"delete_user_{i}"):
                 if user['username'] != 'admin':  # 保护管理员账户
                     users.pop(i)
-                    save_users(users)
+                    save_data(USERS_FILE, users)
                     st.success("用户删除成功！")
                     st.rerun()
                 else:
@@ -906,8 +908,8 @@ def data_statistics():
     """数据统计"""
     st.subheader("📊 数据统计")
     
-    orders = get_orders()
-    inventory = get_inventory()
+    orders = load_data(ORDERS_FILE)
+    inventory = load_data(INVENTORY_FILE)
     
     if orders:
         df = pd.DataFrame(orders)
@@ -989,7 +991,7 @@ def user_page():
 
 def shopping_page():
     """商品购买页面"""
-    inventory = get_inventory()
+    inventory = load_data(INVENTORY_FILE)
     
     if not inventory:
         st.info("暂无商品可购买")
@@ -1266,7 +1268,7 @@ def shopping_page():
 def cart_page():
     """购物车页面"""
     st.title("🛒 我的购物车")
-    inventory = get_inventory()
+    inventory = load_data(INVENTORY_FILE)
     if 'cart' not in st.session_state:
         st.session_state.cart = []
     cart = st.session_state.cart
@@ -1429,7 +1431,7 @@ def cart_page():
     else:
         payment_method = "无支付"
     if st.button("提交订单", disabled=not payment_valid):
-        inventory = get_inventory()
+        inventory = load_data(INVENTORY_FILE)
         can_order = True
         user_name = st.session_state.user['name']
         # 只统计本次订单的商品和金额
@@ -1493,35 +1495,15 @@ def cart_page():
                 'voucher_amount': voucher_amount,
                 'order_time': datetime.now().isoformat()
             }
-            orders = get_orders()
-            
-            # 添加订单到数据库
-            try:
-                add_order(order)
-                print(f"✅ 订单提交: {order['order_id']}")
-                
-                # 立即验证订单是否保存成功
-                saved_orders = get_orders()
-                order_saved = any(o['order_id'] == order['order_id'] for o in saved_orders)
-                if order_saved:
-                    print(f"✅ 订单验证成功: {order['order_id']} 已保存到数据库")
-                else:
-                    print(f"❌ 订单验证失败: {order['order_id']} 未找到在数据库中")
-                    st.error("订单保存验证失败！请联系管理员。")
-                    return
-                    
-            except Exception as e:
-                print(f"❌ 订单保存异常: {e}")
-                st.error(f"订单保存失败: {str(e)}")
-                return
-            
-            # 更新库存
+            orders = load_data(ORDERS_FILE)
+            orders.append(order)
+            save_data(ORDERS_FILE, orders)
             for cart_item in order_items:
                 for product in inventory:
                     if product['id'] == cart_item['product_id']:
                         product['stock'] -= cart_item['quantity']
                         break
-            save_inventory(inventory)
+            save_data(INVENTORY_FILE, inventory)
             st.session_state.cart = []
             st.success("订单提交成功！")
             st.rerun()
@@ -1531,8 +1513,8 @@ def user_order_history():
     st.subheader("📋 订单历史")
     
     # 加载订单和库存数据
-    orders = get_orders()
-    inventory = get_inventory()
+    orders = load_data(ORDERS_FILE)
+    inventory = load_data(INVENTORY_FILE)
     
     # 筛选当前用户的订单
     user_orders = [order for order in orders if order['user_name'] == st.session_state.user['name']]
@@ -1818,7 +1800,7 @@ def modify_order_interface(order, inventory):
                             purchase_limit = product.get('purchase_limit', 0)
                             if purchase_limit > 0:
                                 # 获取历史购买数量（不包含当前订单）
-                                all_orders = get_orders()
+                                all_orders = load_data(ORDERS_FILE)
                                 historical_quantity = 0
                                 for hist_order in all_orders:
                                     if hist_order['user_name'] == user_name and hist_order['order_id'] != order['order_id']:
@@ -1873,7 +1855,7 @@ def modify_order_interface(order, inventory):
             
             if purchase_limit > 0:
                 # 获取历史购买数量（不包含当前订单）
-                all_orders = get_orders()
+                all_orders = load_data(ORDERS_FILE)
                 historical_quantity = 0
                 for hist_order in all_orders:
                     if hist_order['user_name'] == user_name and hist_order['order_id'] != order['order_id']:
@@ -1930,7 +1912,7 @@ def modify_order_interface(order, inventory):
                 
                 if purchase_limit > 0:
                     # 获取历史购买数量（不包含当前订单）
-                    all_orders = get_orders()
+                    all_orders = load_data(ORDERS_FILE)
                     historical_quantity = 0
                     for hist_order in all_orders:
                         if hist_order['user_name'] == user_name and hist_order['order_id'] != order['order_id']:
@@ -2096,7 +2078,7 @@ def modify_order_interface(order, inventory):
                                     purchase_limit = product.get('purchase_limit', 0)
                                     if purchase_limit > 0:
                                         # 获取历史购买数量（不包含当前订单）
-                                        all_orders = get_orders()
+                                        all_orders = load_data(ORDERS_FILE)
                                         historical_quantity = 0
                                         for hist_order in all_orders:
                                             if hist_order['user_name'] == user_name and hist_order['order_id'] != order['order_id']:
@@ -2189,14 +2171,14 @@ def modify_order_interface(order, inventory):
         
         with col1:
             # 按用户查看购买历史
-            users = get_users()
+            users = load_data(USERS_FILE)
             user_names = [user['name'] for user in users]
             if user_names:
                 selected_user = st.selectbox("选择用户查看购买历史", user_names, key="check_user_history")
                 
                 if selected_user:
                     st.write(f"**{selected_user} 的购买历史:**")
-                    inventory = get_inventory()
+                    inventory = load_data(INVENTORY_FILE)
                     user_purchase_summary = []
                     
                     for product in inventory:
@@ -2226,7 +2208,7 @@ def modify_order_interface(order, inventory):
         
         with col2:
             # 按商品查看限购情况
-            inventory = get_inventory()
+            inventory = load_data(INVENTORY_FILE)
             limited_products = [p for p in inventory if p.get('purchase_limit', 0) > 0]
             
             if limited_products:
@@ -2281,46 +2263,6 @@ st.markdown("""
 
 # 主函数
 @handle_frontend_errors
-def main():
-    # 初始化数据
-    initialize_data()
-    
-    # 在侧边栏显示数据库状态
-    with st.sidebar:
-        st.title("🏪 内购系统")
-        
-        # 显示数据库连接状态
-        database_url = os.getenv('DATABASE_URL')
-        if database_url:
-            st.success("🗄️ PostgreSQL 已连接")
-        else:
-            st.warning("🗄️ 使用本地 SQLite")
-        
-        if 'user' not in st.session_state:
-            st.write("请先登录")
-        else:
-            st.write(f"欢迎, {st.session_state.user['name']}")
-            if st.button("退出登录"):
-                del st.session_state.user
-                if 'cart' in st.session_state:
-                    del st.session_state.cart
-                safe_rerun()
-    
-    # 主页面
-    try:
-        if 'user' not in st.session_state:
-            login_page()
-        else:
-            if st.session_state.user['role'] == 'admin':
-                admin_page()
-            else:
-                user_page()
-    except Exception as e:
-        # 忽略所有前端错误
-        error_keywords = ["removeChild", "Node", "DOM", "JavaScript", "NotFoundError"]
-        if not any(keyword in str(e) for keyword in error_keywords):
-            st.error(f"系统错误: {str(e)}")
-
 def update_order(order, modified_items, new_cash, new_voucher, final_total, discount_rate, discount_text, discount_amount, inventory):
     try:
         # 恢复旧库存
@@ -2363,26 +2305,13 @@ def update_order(order, modified_items, new_cash, new_voucher, final_total, disc
                     product['stock'] -= item['quantity']
                     break
         # 保存数据
-        # 更新数据库中的订单
-        try:
-            # 导入数据库模型
-            from database import Order
-            
-            # 获取数据库会话
-            session = db.get_session()
-            
-            # 删除旧订单
-            session.query(Order).filter_by(order_id=order['order_id']).delete()
-            session.commit()
-            session.close()
-            
-            # 添加更新后的订单
-            add_order(order)
-            print(f"订单更新成功: {order['order_id']}")
-        except Exception as e:
-            print(f"订单数据库更新失败: {e}")
-        
-        save_inventory(inventory)
+        orders = load_data(ORDERS_FILE)
+        for idx, o in enumerate(orders):
+            if o['order_id'] == order['order_id']:
+                orders[idx] = order
+                break
+        save_data(ORDERS_FILE, orders)
+        save_data(INVENTORY_FILE, inventory)
         return True
     except Exception as e:
         st.error(f"订单更新失败: {e}")
@@ -2397,20 +2326,10 @@ def cancel_order(order, inventory):
                     product['stock'] += item['quantity']
                     break
         # 删除订单
-        try:
-            # 导入数据库模型
-            from database import Order
-            
-            # 从数据库删除订单
-            session = db.get_session()
-            session.query(Order).filter_by(order_id=order['order_id']).delete()
-            session.commit()
-            session.close()
-            print(f"订单删除成功: {order['order_id']}")
-        except Exception as e:
-            print(f"订单删除失败: {e}")
-        
-        save_inventory(inventory)
+        orders = load_data(ORDERS_FILE)
+        orders = [o for o in orders if o['order_id'] != order['order_id']]
+        save_data(ORDERS_FILE, orders)
+        save_data(INVENTORY_FILE, inventory)
         return True
     except Exception as e:
         st.error(f"订单取消失败: {e}")
@@ -2430,6 +2349,17 @@ def main():
         with st.sidebar:
             st.write(f"👤 当前用户: {st.session_state.user['name']}")
             st.write(f"🔖 角色: {st.session_state.user['role']}")
+            
+            # 显示数据库连接状态
+            try:
+                # 测试数据库连接
+                users_count = len(get_users())
+                orders_count = len(get_orders())
+                inventory_count = len(get_inventory())
+                st.success(f"✅ 数据库连接正常")
+                st.caption(f"用户: {users_count} | 订单: {orders_count} | 商品: {inventory_count}")
+            except Exception as e:
+                st.error(f"❌ 数据库连接异常: {str(e)[:30]}...")
             
             if st.button("退出登录"):
                 del st.session_state.user
