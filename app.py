@@ -1398,6 +1398,21 @@ def database_status_check():
             st.error("❌ DATABASE_URL环境变量未设置")
             st.warning("⚠️ 开发环境: SQLite")
             st.write("**数据库文件:** 本地 SQLite 文件")
+            
+            # 添加解决方案提示
+            with st.expander("📋 PostgreSQL配置说明", expanded=True):
+                st.write("**您的应用正在使用SQLite，需要配置PostgreSQL：**")
+                st.write("1. 在Render仪表板创建PostgreSQL数据库")
+                st.write("2. 复制 'External Database URL'")
+                st.write("3. 在应用环境变量中添加:")
+                st.code("Key: DATABASE_URL\nValue: postgresql://user:pass@host:port/db")
+                st.write("4. 重新部署应用")
+                
+                # 检查是否在Render环境
+                if 'RENDER' in os.environ:
+                    st.warning("🚨 检测到Render环境但未配置PostgreSQL!")
+                else:
+                    st.info("ℹ️ 本地开发环境正常使用SQLite")
         
         # 显示关键环境变量（调试用）
         st.write("### 🐛 环境变量调试")
