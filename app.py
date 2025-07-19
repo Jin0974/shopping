@@ -334,27 +334,49 @@ def check_purchase_limit(user_name, product_id, current_cart_quantity, new_quant
 
 # 登录页面
 def login_page():
-    """登录页面"""
+    """登录页面 - 稳定版本"""
     st.title("🛒 内购系统登录")
+    
+    # 添加登录状态持久化
+    if 'login_attempts' not in st.session_state:
+        st.session_state.login_attempts = 0
     
     with st.form("login_form"):
         st.subheader("请输入您的姓名")
-        name = st.text_input("姓名")
+        name = st.text_input("姓名", max_chars=50)
         submit_button = st.form_submit_button("登录")
         
         if submit_button:
-            if name:
-                user = authenticate_user(name)
-                if user:
-                    st.session_state.user = user
-                    st.success(f"欢迎, {user['name']}!")
-                    st.rerun()
-                else:
-                    st.error("登录失败，请重试")
+            if name and name.strip():
+                try:
+                    with st.spinner("🔄 正在验证用户..."):
+                        user = authenticate_user(name.strip())
+                        if user:
+                            # 安全设置用户状态
+                            st.session_state.user = user
+                            st.session_state.user_name = user['name']
+                            st.session_state.user_role = user['role']
+                            st.session_state.login_time = datetime.now().isoformat()
+                            st.session_state.login_attempts = 0
+                            
+                            st.success(f"✅ 欢迎, {user['name']}!")
+                            time.sleep(0.5)  # 让用户看到成功消息
+                            st.rerun()
+                        else:
+                            st.session_state.login_attempts += 1
+                            st.error("❌ 登录失败，请重试")
+                except Exception as e:
+                    st.error(f"❌ 登录过程出现错误: {str(e)}")
+                    st.info("💡 请刷新页面重试")
             else:
-                st.error("请输入您的姓名")
+                st.error("⚠️ 请输入您的姓名")
     
-    # 不再显示管理员登录提示
+    # 添加登录状态保护
+    if st.session_state.get('login_attempts', 0) > 5:
+        st.warning("⚠️ 登录尝试过多，请刷新页面")
+        if st.button("🔄 重置登录状态"):
+            st.session_state.login_attempts = 0
+            st.rerun()
 
 # 管理员页面
 def admin_page():
@@ -612,80 +634,112 @@ def inventory_management():
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            # 批量导入按钮
-            uploaded_file = st.file_uploader("", type=['xlsx', 'csv'], key="bulk_import", label_visibility="collapsed")
+            # 批量导入按钮 - 稳定版本
+            st.write("📦 批量导入商品")
+            uploaded_file = st.file_uploader("选择CSV或Excel文件", type=['xlsx', 'csv'], key="bulk_import", label_visibility="collapsed")
+            
+            # 使用session state避免重复处理
             if uploaded_file is not None:
-                try:
-                    # 读取文件
-                    if uploaded_file.name.endswith('.xlsx'):
-                        df_import = pd.read_excel(uploaded_file)
-                    else:
-                        df_import = pd.read_csv(uploaded_file, encoding='utf-8')
-                    
-                    # 自动导入
-                    success_count = 0
-                    
-                    for _, row in df_import.iterrows():
-                        try:
-                            # 更严格的数据处理
-                            name = str(row.get("商品名称", row.get("name", ""))).strip()
-                            price = row.get("价格", row.get("price", 0))
-                            stock = row.get("库存", row.get("stock", 0))
-                            description = str(row.get("描述", row.get("description", ""))).strip()
-                            # 处理条码字段（支持多种表头名称）
-                            barcode = str(row.get("条码", row.get("code", row.get("barcode", "")))).strip()
-                            # 处理限购数量字段（支持多种表头名称）
-                            purchase_limit = row.get("限购数量", row.get("limit", row.get("purchase_limit", 0)))
-                            
-                            # 处理价格数据
-                            if pd.isna(price) or price == "":
-                                price = 0
+                # 检查文件是否已处理
+                file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+                if st.session_state.get('last_processed_file') != file_id:
+                    try:
+                        with st.spinner("🔄 正在处理文件..."):
+                            # 读取文件
+                            if uploaded_file.name.endswith('.xlsx'):
+                                df_import = pd.read_excel(uploaded_file)
                             else:
-                                price = float(price)
+                                df_import = pd.read_csv(uploaded_file, encoding='utf-8')
                             
-                            # 处理库存数据
-                            if pd.isna(stock) or stock == "":
-                                stock = 0
+                            st.info(f"📊 读取到 {len(df_import)} 行数据")
+                            
+                            # 预处理数据
+                            new_products = []
+                            success_count = 0
+                            error_count = 0
+                            
+                            for idx, row in df_import.iterrows():
+                                try:
+                                    # 更严格的数据处理
+                                    name = str(row.get("商品名称", row.get("name", ""))).strip()
+                                    price = row.get("价格", row.get("price", 0))
+                                    stock = row.get("库存", row.get("stock", 0))
+                                    description = str(row.get("描述", row.get("description", ""))).strip()
+                                    # 处理条码字段（支持多种表头名称）
+                                    barcode = str(row.get("条码", row.get("code", row.get("barcode", "")))).strip()
+                                    # 处理限购数量字段（支持多种表头名称）
+                                    purchase_limit = row.get("限购数量", row.get("limit", row.get("purchase_limit", 0)))
+                                    
+                                    # 处理价格数据
+                                    if pd.isna(price) or price == "":
+                                        price = 0
+                                    else:
+                                        price = float(price)
+                                    
+                                    # 处理库存数据
+                                    if pd.isna(stock) or stock == "":
+                                        stock = 0
+                                    else:
+                                        stock = int(stock)
+                                    
+                                    # 处理限购数量数据
+                                    if pd.isna(purchase_limit) or purchase_limit == "":
+                                        purchase_limit = 0  # 0表示不限购
+                                    else:
+                                        purchase_limit = int(purchase_limit)
+                                    
+                                    # 如果没有条码，使用商品名称+随机数生成
+                                    if not barcode or barcode == 'nan':
+                                        barcode = f"{name[:3]}{str(uuid.uuid4())[:6]}"
+                                    
+                                    new_product = {
+                                        "id": str(uuid.uuid4())[:8],
+                                        "name": name,
+                                        "price": price,
+                                        "stock": stock,
+                                        "description": description,
+                                        "barcode": barcode,
+                                        "purchase_limit": purchase_limit,
+                                        "created_at": datetime.now().isoformat()
+                                    }
+                                    
+                                    # 只导入有效的商品（名称不为空，价格大于等于0）
+                                    if new_product["name"] and new_product["price"] >= 0:
+                                        new_products.append(new_product)
+                                        success_count += 1
+                                    else:
+                                        error_count += 1
+                                        
+                                except Exception as e:
+                                    error_count += 1
+                                    if error_count <= 3:  # 只显示前3个错误
+                                        st.warning(f"第 {idx+1} 行处理失败: {e}")
+                            
+                            # 批量保存数据
+                            if success_count > 0:
+                                # 保存到数据库
+                                combined_inventory = inventory + new_products
+                                save_inventory(combined_inventory)
+                                
+                                # 标记文件已处理
+                                st.session_state.last_processed_file = file_id
+                                
+                                # 显示结果
+                                st.success(f"✅ 成功导入 {success_count} 个商品！")
+                                if error_count > 0:
+                                    st.warning(f"⚠️ 跳过 {error_count} 行无效数据")
+                                
+                                # 延迟刷新，让用户看到成功消息
+                                time.sleep(1)
+                                st.rerun()
                             else:
-                                stock = int(stock)
-                            
-                            # 处理限购数量数据
-                            if pd.isna(purchase_limit) or purchase_limit == "":
-                                purchase_limit = 0  # 0表示不限购
-                            else:
-                                purchase_limit = int(purchase_limit)
-                            
-                            # 如果没有条码，使用商品名称+随机数生成
-                            if not barcode:
-                                barcode = f"{name[:3]}{str(uuid.uuid4())[:6]}"
-                            
-                            new_product = {
-                                "id": str(uuid.uuid4())[:8],
-                                "name": name,
-                                "price": price,
-                                "stock": stock,
-                                "description": description,
-                                "barcode": barcode,
-                                "purchase_limit": purchase_limit,
-                                "created_at": datetime.now().isoformat()
-                            }
-                            
-                            # 只导入有效的商品（名称不为空，价格大于等于0）
-                            if new_product["name"] and new_product["price"] >= 0:
-                                inventory.append(new_product)
-                                success_count += 1
-                        except Exception as e:
-                            st.warning(f"跳过无效行: {e}")
-                    
-                    if success_count > 0:
-                        save_data(INVENTORY_FILE, inventory)
-                        st.success(f"✅ 成功导入 {success_count} 个商品！")
-                        st.rerun()
-                    else:
-                        st.error("❌ 没有有效的商品数据")
-                        
-                except Exception as e:
-                    st.error(f"❌ 文件读取失败: {str(e)}")
+                                st.error("❌ 没有有效的商品数据")
+                                
+                    except Exception as e:
+                        st.error(f"❌ 文件处理失败: {str(e)}")
+                        st.info("💡 请检查文件格式是否正确")
+                else:
+                    st.info("✅ 文件已处理完成")
         
         with col2:
             # 清空所有库存按钮
@@ -1512,7 +1566,6 @@ def database_status_check():
                 db.add_user(test_user)
                 
                 # 验证写入
-                import time
                 time.sleep(0.5)
                 after_users = db.load_users()
                 after_count = len(after_users)
@@ -1566,60 +1619,132 @@ def database_status_check():
                 st.code(str(e))
     
     with write_test_col4:
-        if st.button("🗑️ 强制清空数据库", help="强制清空所有数据（商品、订单、用户）"):
-            try:
-                st.warning("⚠️ 正在清空数据库...")
-                
-                # 显示清空前状态
-                before_inventory = db.load_inventory()
-                before_orders = db.load_orders()
-                before_users = db.load_users()
-                
-                st.write(f"清空前 - 商品: {len(before_inventory)}, 订单: {len(before_orders)}, 用户: {len(before_users)}")
-                
-                # 强制清空
-                db.save_inventory([])
-                db.clear_orders()
-                db.clear_users()
-                
-                # 验证清空结果
-                time.sleep(0.5)
-                after_inventory = db.load_inventory()
-                after_orders = db.load_orders()
-                after_users = db.load_users()
-                
-                st.write(f"清空后 - 商品: {len(after_inventory)}, 订单: {len(after_orders)}, 用户: {len(after_users)}")
-                
-                if len(after_inventory) == 0 and len(after_orders) == 0 and len(after_users) == 0:
-                    st.success("✅ 数据库清空成功！")
-                else:
-                    st.error("❌ 数据库清空失败！")
+        if st.button("🗑️ 强制清空数据库", help="强制清空所有数据（商品、订单、用户，保留管理员）"):
+            # 添加二次确认
+            if 'confirm_force_clear' not in st.session_state:
+                st.session_state.confirm_force_clear = False
+            
+            if not st.session_state.confirm_force_clear:
+                st.session_state.confirm_force_clear = True
+                st.warning("⚠️ 警告：此操作将删除所有数据！再次点击确认。")
+                st.rerun()
+            else:
+                try:
+                    st.warning("🔄 正在执行强制清空...")
                     
-            except Exception as e:
-                st.error(f"❌ 数据库清空异常: {str(e)}")
-                st.code(str(e))
+                    # 显示清空前状态
+                    before_inventory = db.load_inventory()
+                    before_orders = db.load_orders()
+                    before_users = db.load_users()
+                    
+                    st.write(f"清空前 - 商品: {len(before_inventory)}, 订单: {len(before_orders)}, 用户: {len(before_users)}")
+                    
+                    # 使用强制清空方法
+                    with st.spinner("正在清空数据库..."):
+                        db.force_clear_all_data()
+                    
+                    st.success("✅ 强制清空执行完成")
+                    
+                    # 等待数据库同步
+                    import time as time_module
+                    time_module.sleep(2)
+                    
+                    # 验证清空结果
+                    st.info("🔍 验证清空结果...")
+                    after_inventory = db.load_inventory()
+                    after_orders = db.load_orders()
+                    after_users = db.load_users()
+                    
+                    st.write(f"清空后 - 商品: {len(after_inventory)}, 订单: {len(after_orders)}, 用户: {len(after_users)}")
+                    
+                    total_remaining = len(after_inventory) + len(after_orders) + (len(after_users) - 1)  # 减去管理员
+                    if total_remaining == 0:
+                        st.success("🎉 数据库强制清空成功！")
+                        st.balloons()
+                    else:
+                        st.warning(f"⚠️ 还剩余 {total_remaining} 条数据未清空")
+                    
+                    # 重置确认状态
+                    st.session_state.confirm_force_clear = False
+                    
+                except Exception as e:
+                    st.error(f"❌ 数据库清空异常: {str(e)}")
+                    st.code(str(e))
+                    # 重置确认状态
+                    st.session_state.confirm_force_clear = False
+        
+        # 如果用户取消了确认
+        if st.session_state.get('confirm_force_clear', False):
+            if st.button("❌ 取消清空"):
+                st.session_state.confirm_force_clear = False
+                st.info("✅ 已取消清空操作")
+                st.rerun()
 
 
 # 主程序入口
 def main():
-    """主程序"""
-    # 初始化数据
-    initialize_data()
-    
-    # 检查登录状态
-    if 'user' not in st.session_state:
-        login_page()
-    else:
-        # 根据用户角色显示不同页面
-        if st.session_state.user['role'] == 'admin':
-            admin_page()
+    """主程序 - 稳定版本"""
+    try:
+        # 初始化数据
+        initialize_data()
+        
+        # 添加session state保护
+        if 'app_initialized' not in st.session_state:
+            st.session_state.app_initialized = True
+            st.session_state.session_id = str(uuid.uuid4())[:8]
+        
+        # 添加用户状态验证
+        user_valid = (
+            'user' in st.session_state and 
+            st.session_state.user and 
+            'name' in st.session_state.user and 
+            'role' in st.session_state.user
+        )
+        
+        # 检查登录状态
+        if not user_valid:
+            # 清理可能的损坏状态
+            if 'user' in st.session_state:
+                del st.session_state.user
+            login_page()
         else:
-            user_page()
+            # 添加登出按钮到侧边栏
+            with st.sidebar:
+                st.write(f"👤 {st.session_state.user['name']}")
+                st.write(f"🏷️ {st.session_state.user['role']}")
+                if st.button("🚪 登出"):
+                    # 清理session state
+                    keys_to_clear = ['user', 'user_name', 'user_role', 'login_time', 'cart']
+                    for key in keys_to_clear:
+                        if key in st.session_state:
+                            del st.session_state[key]
+                    st.success("✅ 已安全登出")
+                    time.sleep(0.5)
+                    st.rerun()
+            
+            # 根据用户角色显示不同页面
+            try:
+                if st.session_state.user['role'] == 'admin':
+                    admin_page()
+                else:
+                    user_page()
+            except Exception as e:
+                st.error(f"页面加载失败: {str(e)}")
+                st.info("💡 请尝试登出后重新登录")
+                if st.button("🔄 重新登录"):
+                    if 'user' in st.session_state:
+                        del st.session_state.user
+                    st.rerun()
+                    
+    except Exception as e:
+        st.error(f"🚨 应用启动失败: {str(e)}")
+        st.code(str(e))
+        if st.button("🔄 重启应用"):
+            # 清理所有session state
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
 
 # 运行应用
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        st.error(f"应用启动失败: {str(e)}")
-        st.code(str(e))
+    main()

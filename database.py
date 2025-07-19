@@ -338,10 +338,13 @@ class DatabaseManager:
         """清空所有订单"""
         session = self.get_session()
         try:
-            session.query(Order).delete()
+            # 使用TRUNCATE来重置自增ID（如果需要）
+            session.execute(text("DELETE FROM orders"))
             session.commit()
+            print("✅ 订单数据清空成功")
         except Exception as e:
             session.rollback()
+            print(f"❌ 订单清空失败: {e}")
             raise e
         finally:
             session.close()
@@ -350,22 +353,57 @@ class DatabaseManager:
         """清空所有商品"""
         session = self.get_session()
         try:
-            session.query(Product).delete()
+            session.execute(text("DELETE FROM products"))
             session.commit()
+            print("✅ 商品数据清空成功")
         except Exception as e:
             session.rollback()
+            print(f"❌ 商品清空失败: {e}")
             raise e
         finally:
             session.close()
 
     def clear_users(self):
-        """清空所有用户"""
+        """清空所有用户（保留管理员）"""
         session = self.get_session()
         try:
-            session.query(User).delete()
+            # 只删除非管理员用户，保留管理员666
+            session.execute(text("DELETE FROM users WHERE name != '管理员666'"))
             session.commit()
+            print("✅ 用户数据清空成功（保留管理员）")
         except Exception as e:
             session.rollback()
+            print(f"❌ 用户清空失败: {e}")
+            raise e
+        finally:
+            session.close()
+
+    def force_clear_all_data(self):
+        """强制清空所有数据"""
+        session = self.get_session()
+        try:
+            # 按顺序清空表（避免外键约束问题）
+            print("🔄 开始强制清空所有数据...")
+            
+            # 1. 清空订单
+            session.execute(text("DELETE FROM orders"))
+            print("  ✅ 订单表已清空")
+            
+            # 2. 清空商品
+            session.execute(text("DELETE FROM products"))  
+            print("  ✅ 商品表已清空")
+            
+            # 3. 清空用户（保留管理员）
+            session.execute(text("DELETE FROM users WHERE name != '管理员666'"))
+            print("  ✅ 用户表已清空（保留管理员）")
+            
+            # 提交所有更改
+            session.commit()
+            print("🎉 所有数据清空成功！")
+            
+        except Exception as e:
+            session.rollback()
+            print(f"❌ 强制清空失败: {e}")
             raise e
         finally:
             session.close()
