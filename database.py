@@ -1,6 +1,6 @@
 import os
 import json
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, Boolean, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
@@ -112,7 +112,7 @@ class DatabaseManager:
             # 测试数据库连接
             print("🔍 测试数据库连接...")
             with self.engine.connect() as connection:
-                result = connection.execute("SELECT 1")
+                result = connection.execute(text("SELECT 1"))
                 print("✅ 数据库连接测试成功")
             
             # 创建表
@@ -152,12 +152,6 @@ class DatabaseManager:
                 st.error(f"数据库连接失败: {error_msg}")
             
             raise e
-            
-        except Exception as e:
-            print(f"数据库连接失败: {e}")
-            # 在Streamlit中也显示错误
-            if 'streamlit' in globals():
-                st.error(f"数据库连接失败: {e}")
             raise e
     
     def get_session(self):
