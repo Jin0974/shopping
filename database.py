@@ -74,29 +74,84 @@ class DatabaseManager:
             else:
                 # Render PostgreSQL URL 格式修正
                 if database_url.startswith('postgres://'):
+                    print("⚠️  检测到老版本postgres://URL，自动修正为postgresql://")
                     database_url = database_url.replace('postgres://', 'postgresql://', 1)
                 print("✅ 使用PostgreSQL数据库")
-                print(f"数据库主机: {database_url.split('@')[1].split('/')[0] if '@' in database_url else '未知'}")
+                if '@' in database_url:
+                    try:
+                        host_info = database_url.split('@')[1].split('/')[0]
+                        print(f"数据库主机: {host_info}")
+                    except:
+                        print("数据库主机: 解析失败")
             
-            # 添加连接池配置
-            self.engine = create_engine(
-                database_url,
-                pool_pre_ping=True,
-                pool_recycle=300,  # 减少连接回收时间到5分钟
-                echo=True  # 开启SQL日志，便于调试
-            )
+            # 根据数据库类型配置连接参数
+            if database_url.startswith('sqlite://'):
+                # SQLite配置
+                self.engine = create_engine(
+                    database_url,
+                    echo=False,  # SQLite不需要详细日志
+                    connect_args={'check_same_thread': False}
+                )
+            else:
+                # PostgreSQL配置
+                self.engine = create_engine(
+                    database_url,
+                    pool_pre_ping=True,
+                    pool_recycle=300,  # 连接回收时间5分钟
+                    pool_size=5,  # 连接池大小
+                    max_overflow=10,  # 最大溢出连接
+                    echo=False,  # 生产环境关闭详细日志
+                    connect_args={
+                        'sslmode': 'require',  # 要求SSL连接
+                        'connect_timeout': 30,  # 连接超时30秒
+                    }
+                )
+            
             self.Session = sessionmaker(bind=self.engine)
             
+            # 测试数据库连接
+            print("🔍 测试数据库连接...")
+            with self.engine.connect() as connection:
+                result = connection.execute("SELECT 1")
+                print("✅ 数据库连接测试成功")
+            
             # 创建表
+            print("🔍 创建/验证数据库表...")
             Base.metadata.create_all(self.engine)
-            print("数据库表创建完成")
+            print("✅ 数据库表创建/验证完成")
             
             # 初始化管理员用户
+            print("🔍 初始化管理员用户...")
             self.init_admin_user()
-            print("管理员用户初始化完成")
+            print("✅ 管理员用户初始化完成")
             
             # 显示连接成功信息
-            print("✅ 数据库连接成功！")
+            db_type = "SQLite" if database_url.startswith('sqlite://') else "PostgreSQL"
+            print(f"🎉 {db_type}数据库连接成功！")
+            
+        except Exception as e:
+            error_msg = str(e)
+            print(f"❌ 数据库连接失败: {error_msg}")
+            
+            # 提供具体的错误诊断
+            if "password authentication failed" in error_msg:
+                print("🔑 诊断: 数据库密码认证失败")
+                print("   解决方案: 检查DATABASE_URL中的用户名和密码")
+            elif "could not connect to server" in error_msg:
+                print("🌐 诊断: 无法连接到数据库服务器")
+                print("   解决方案: 检查网络连接和数据库服务器状态")
+            elif "does not exist" in error_msg:
+                print("🗄️ 诊断: 数据库不存在")
+                print("   解决方案: 检查DATABASE_URL中的数据库名称")
+            elif "SSL connection has been closed unexpectedly" in error_msg:
+                print("🔒 诊断: SSL连接问题")
+                print("   解决方案: 检查SSL配置")
+            
+            # 在Streamlit中也显示错误
+            if hasattr(st, 'error'):
+                st.error(f"数据库连接失败: {error_msg}")
+            
+            raise e
             
         except Exception as e:
             print(f"数据库连接失败: {e}")

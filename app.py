@@ -156,7 +156,6 @@ def save_inventory(inventory_data):
         st.write("✅ 数据库保存操作已执行")
         
         # 立即验证保存结果
-        import time
         time.sleep(0.5)  # 等待数据库写入完成
         
         saved_data = db.load_inventory()
@@ -192,7 +191,6 @@ def add_order(order_data):
         st.write("✅ 订单保存操作已执行")
         
         # 验证保存结果
-        import time
         time.sleep(0.5)
         
         saved_orders = db.load_orders()
@@ -1158,142 +1156,7 @@ def shopping_page():
                             st.error("缺货")
                         
                         st.divider()
-        page = total_pages
-    st.session_state['user_goods_page'] = page
-    start_idx = (page - 1) * PAGE_SIZE
-    end_idx = start_idx + PAGE_SIZE
-    current_page_items = filtered_inventory[start_idx:end_idx]
 
-    st.write(f"### 🛍️ 商品列表  (第 {page} / {total_pages} 页，共 {total_items} 条)")
-
-    # 表格表头（带排序功能）
-    col1, col2, col3, col4, col5, col6, col7 = st.columns([1.5, 2.5, 1, 1, 1, 1, 1])
-    with col1:
-        st.write("**条码**")
-    with col2:
-        st.write("**产品名称**")
-    with col3:
-        st.write("**库存**")
-    with col4:
-        st.write("**价格**")
-    with col5:
-        st.write("**限购数量**")
-    with col6:
-        st.write("**数量**")
-    with col7:
-        st.write("**加入购物车**")
-    st.divider()
-
-    # 为每个商品添加数量选择和加入购物车按钮
-    for i, product in enumerate(current_page_items):
-        col1, col2, col3, col4, col5, col6, col7 = st.columns([1.5, 2.5, 1, 1, 1, 1, 1])
-        with col1:
-            st.write(product.get('barcode', 'N/A'))
-        with col2:
-            st.write(product['name'])
-        with col3:
-            stock_color = "red" if product['stock'] == 0 else "green" if product['stock'] > 10 else "orange"
-            st.write(f":{stock_color}[{product['stock']}]")
-        with col4:
-            st.write(f"¥{product['price']:.2f}")
-        with col5:
-            purchase_limit = product.get('purchase_limit', 0)
-            if purchase_limit > 0:
-                user_name = st.session_state.user['name']
-                historical_quantity = get_user_purchase_history(user_name, product['id'])
-                if historical_quantity > 0:
-                    remaining = max(0, purchase_limit - historical_quantity)
-                    if remaining > 0:
-                        st.write(f":orange[限购{purchase_limit}件]\n:blue[已购{historical_quantity}件]\n:green[可购{remaining}件]")
-                    else:
-                        st.write(f":orange[限购{purchase_limit}件]\n:red[已购{historical_quantity}件]\n:red[已达上限]")
-                else:
-                    st.write(f":orange[{purchase_limit}件]")
-            else:
-                st.write(":green[不限购]")
-        with col6:
-            if product['stock'] > 0:
-                max_qty = product['stock']
-                if purchase_limit > 0:
-                    user_name = st.session_state.user['name']
-                    historical_quantity = get_user_purchase_history(user_name, product['id'])
-                    remaining = max(0, purchase_limit - historical_quantity)
-                    max_qty = min(max_qty, remaining)
-                if max_qty > 0:
-                    quantity = st.number_input(
-                        "",
-                        min_value=1,
-                        max_value=max_qty,
-                        value=1,
-                        key=f"qty_{product['id']}",
-                        label_visibility="collapsed"
-                    )
-                else:
-                    st.write(":red[已达上限]")
-            else:
-                st.write("-")
-        with col7:
-            if product['stock'] > 0:
-                purchase_limit = product.get('purchase_limit', 0)
-                can_add_to_cart = True
-                if purchase_limit > 0:
-                    user_name = st.session_state.user['name']
-                    historical_quantity = get_user_purchase_history(user_name, product['id'])
-                    remaining = max(0, purchase_limit - historical_quantity)
-                    if remaining <= 0:
-                        can_add_to_cart = False
-                if can_add_to_cart:
-                    if st.button("加入购物车", key=f"add_{product['id']}"):
-                        quantity = st.session_state.get(f"qty_{product['id']}", 1)
-                        existing_item = None
-                        current_cart_quantity = 0
-                        for item in st.session_state.cart:
-                            if item['product_id'] == product['id']:
-                                existing_item = item
-                                current_cart_quantity = item['quantity']
-                                break
-                        purchase_limit = product.get('purchase_limit', 0)
-                        user_name = st.session_state.user['name']
-                        can_purchase, error_msg = check_purchase_limit(
-                            user_name,
-                            product['id'],
-                            current_cart_quantity,
-                            quantity,
-                            purchase_limit
-                        )
-                        if not can_purchase:
-                            st.error(error_msg)
-                        else:
-                            if existing_item:
-                                existing_item['quantity'] += quantity
-                            else:
-                                st.session_state.cart.append({
-                                    'product_id': product['id'],
-                                    'product_name': product['name'],
-                                    'price': product['price'],
-                                    'quantity': quantity
-                                })
-                            st.success(f"已添加 {quantity} 个 {product['name']} 到购物车")
-                            st.rerun()
-                else:
-                    st.button("已达上限", disabled=True, key=f"limit_{product['id']}")
-            else:
-                st.button("库存不足", key=f"out_of_stock_{product['id']}", disabled=True)
-
-    # 分页控件（底部）
-    st.divider()
-    col_prev, col_page, col_next = st.columns([1, 2, 1])
-    with col_prev:
-        if st.button("上一页", disabled=(page <= 1), key="user_goods_prev_page"):
-            st.session_state['user_goods_page'] = page - 1
-            st.rerun()
-    with col_page:
-        st.markdown(f"<div style='text-align:center;'>第 <b>{page}</b> / <b>{total_pages}</b> 页</div>", unsafe_allow_html=True)
-    with col_next:
-        if st.button("下一页", disabled=(page >= total_pages), key="user_goods_next_page"):
-            st.session_state['user_goods_page'] = page + 1
-            st.rerun()
-    # 购物车展示和结算功能已移至 cart_page()
 # 新增购物车页面
 def cart_page():
     """购物车页面"""
@@ -1492,23 +1355,83 @@ def database_status_check():
     with col2:
         st.write("### 🔧 环境信息")
         
-        # 检查环境变量
+        # 详细的环境变量检查
         import os
         database_url = os.getenv('DATABASE_URL')
+        st.write("### 🔍 详细诊断")
+        st.write(f"**DATABASE_URL环境变量存在:** {'是' if database_url else '否'}")
+        
         if database_url:
-            st.success("✅ 生产环境: PostgreSQL")
-            st.write(f"**数据库URL:** {database_url[:50]}...")
+            st.success("✅ 检测到DATABASE_URL环境变量")
+            # 安全显示URL（隐藏密码）
+            if '@' in database_url:
+                parts = database_url.split('@')
+                if len(parts) >= 2:
+                    prefix = parts[0].split('://')[0]
+                    suffix = '@' + parts[1]
+                    masked_url = f"{prefix}://***:***{suffix}"
+                else:
+                    masked_url = database_url[:20] + "..."
+            else:
+                masked_url = database_url[:50] + "..."
+            st.write(f"**数据库URL:** {masked_url}")
             
-            # 解析数据库URL
+            # 解析数据库类型
             if 'postgresql://' in database_url:
                 st.write("**数据库类型:** PostgreSQL")
+                st.success("✅ 生产环境: PostgreSQL")
             elif 'sqlite://' in database_url:
                 st.write("**数据库类型:** SQLite")
+                st.warning("⚠️ 仍在使用SQLite（URL配置错误）")
             else:
                 st.write("**数据库类型:** 未知")
+                st.error("❌ 数据库URL格式不正确")
+                
+            # 显示主机信息
+            try:
+                if '@' in database_url:
+                    host_part = database_url.split('@')[1].split('/')[0]
+                    st.write(f"**数据库主机:** {host_part}")
+            except:
+                pass
         else:
+            st.error("❌ DATABASE_URL环境变量未设置")
             st.warning("⚠️ 开发环境: SQLite")
             st.write("**数据库文件:** 本地 SQLite 文件")
+        
+        # 显示关键环境变量（调试用）
+        st.write("### 🐛 环境变量调试")
+        env_vars = dict(os.environ)
+        db_related = {k: v for k, v in env_vars.items() if 'DATABASE' in k.upper()}
+        if db_related:
+            st.write("**数据库相关环境变量:**")
+            for k, v in db_related.items():
+                # 隐藏敏感信息
+                if len(v) > 20:
+                    masked_v = v[:10] + "..." + v[-10:]
+                else:
+                    masked_v = v[:10] + "..." if len(v) > 10 else v
+                st.write(f"- {k}: {masked_v}")
+        else:
+            st.write("**没有找到DATABASE_URL环境变量**")
+        else:
+            st.error("❌ 开发环境: SQLite")
+            st.write("**数据库文件:** 本地 SQLite 文件")
+            
+            # 添加解决方案提示
+            with st.expander("📋 PostgreSQL配置说明", expanded=True):
+                st.write("**您的应用正在使用SQLite，需要配置PostgreSQL：**")
+                st.write("1. 在Render仪表板创建PostgreSQL数据库")
+                st.write("2. 复制 'External Database URL'")
+                st.write("3. 在应用环境变量中添加:")
+                st.code("Key: DATABASE_URL\nValue: postgresql://user:pass@host:port/db")
+                st.write("4. 重新部署应用")
+                
+                # 检查是否在Render环境
+                if 'RENDER' in os.environ:
+                    st.warning("🚨 检测到Render环境但未配置PostgreSQL!")
+                else:
+                    st.info("ℹ️ 本地开发环境正常使用SQLite")
         
         # 检查数据库连接
         try:
@@ -1526,14 +1449,11 @@ def database_status_check():
     # 数据库写入测试
     st.write("### 🧪 数据库写入测试")
     
-    write_test_col1, write_test_col2, write_test_col3 = st.columns(3)
+    write_test_col1, write_test_col2, write_test_col3, write_test_col4 = st.columns(4)
     
     with write_test_col1:
         if st.button("🧪 测试商品写入", help="测试商品数据是否能正确写入数据库"):
             try:
-                import time
-                from datetime import datetime
-                
                 # 创建测试商品
                 test_product = {
                     'id': f'test_{int(time.time())}',
@@ -1578,8 +1498,6 @@ def database_status_check():
     with write_test_col2:
         if st.button("🧪 测试用户写入", help="测试用户数据是否能正确写入数据库"):
             try:
-                import time
-                
                 # 创建测试用户
                 test_user = {
                     'username': f'test_user_{int(time.time())}',
@@ -1648,6 +1566,40 @@ def database_status_check():
                 
             except Exception as e:
                 st.error(f"❌ 数据库环境检查失败: {str(e)}")
+                st.code(str(e))
+    
+    with write_test_col4:
+        if st.button("🗑️ 强制清空数据库", help="强制清空所有数据（商品、订单、用户）"):
+            try:
+                st.warning("⚠️ 正在清空数据库...")
+                
+                # 显示清空前状态
+                before_inventory = db.load_inventory()
+                before_orders = db.load_orders()
+                before_users = db.load_users()
+                
+                st.write(f"清空前 - 商品: {len(before_inventory)}, 订单: {len(before_orders)}, 用户: {len(before_users)}")
+                
+                # 强制清空
+                db.save_inventory([])
+                db.clear_orders()
+                db.clear_users()
+                
+                # 验证清空结果
+                time.sleep(0.5)
+                after_inventory = db.load_inventory()
+                after_orders = db.load_orders()
+                after_users = db.load_users()
+                
+                st.write(f"清空后 - 商品: {len(after_inventory)}, 订单: {len(after_orders)}, 用户: {len(after_users)}")
+                
+                if len(after_inventory) == 0 and len(after_orders) == 0 and len(after_users) == 0:
+                    st.success("✅ 数据库清空成功！")
+                else:
+                    st.error("❌ 数据库清空失败！")
+                    
+            except Exception as e:
+                st.error(f"❌ 数据库清空异常: {str(e)}")
                 st.code(str(e))
 
 
