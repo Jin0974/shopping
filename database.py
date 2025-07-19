@@ -152,7 +152,6 @@ class DatabaseManager:
                 st.error(f"数据库连接失败: {error_msg}")
             
             raise e
-            raise e
     
     def get_session(self):
         """获取数据库会话"""
@@ -352,6 +351,18 @@ class DatabaseManager:
         session = self.get_session()
         try:
             session.query(Product).delete()
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+
+    def clear_users(self):
+        """清空所有用户"""
+        session = self.get_session()
+        try:
+            session.query(User).delete()
             session.commit()
         except Exception as e:
             session.rollback()
