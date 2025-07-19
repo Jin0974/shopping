@@ -1414,9 +1414,6 @@ def database_status_check():
                 st.write(f"- {k}: {masked_v}")
         else:
             st.write("**没有找到DATABASE_URL环境变量**")
-        else:
-            st.error("❌ 开发环境: SQLite")
-            st.write("**数据库文件:** 本地 SQLite 文件")
             
             # 添加解决方案提示
             with st.expander("📋 PostgreSQL配置说明", expanded=True):
