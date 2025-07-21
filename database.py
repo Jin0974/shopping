@@ -99,35 +99,19 @@ class DatabaseManager:
                     connect_args={'check_same_thread': False}
                 )
             else:
-                # PostgreSQL配置 - 根据环境优化
-                engine_kwargs = {
-                    'pool_pre_ping': True,
-                    'pool_recycle': 300,  # 连接回收时间5分钟
-                    'pool_size': 5,  # 连接池大小
-                    'max_overflow': 10,  # 最大溢出连接
-                    'echo': False,  # 生产环境关闭详细日志
-                    'connect_args': {
-                        'sslmode': 'require',  # 要求SSL连接
-                        'connect_timeout': 30,  # 连接超时30秒
+                # PostgreSQL配置（恢复为原始稳定版本）
+                self.engine = create_engine(
+                    database_url,
+                    pool_pre_ping=True,
+                    pool_recycle=300,  # 连接回收时间5分钟
+                    pool_size=5,       # 连接池大小
+                    max_overflow=10,   # 最大溢出连接
+                    echo=False,        # 生产环境关闭详细日志
+                    connect_args={
+                        'sslmode': 'require',        # 要求SSL连接
+                        'connect_timeout': 30,       # 连接超时30秒
                     }
-                }
-                
-                # Render环境特殊优化
-                if is_render_environment():
-                    engine_kwargs.update({
-                        'pool_size': 3,  # Render环境减少连接池大小
-                        'max_overflow': 5,  # 减少溢出连接
-                        'pool_recycle': 180,  # 更频繁回收（3分钟）
-                        'pool_timeout': 20,  # 缩短获取连接超时
-                        'connect_args': {
-                            'sslmode': 'require',
-                            'connect_timeout': 15,  # 缩短连接超时
-                            'command_timeout': 30,  # 命令超时30秒
-                        }
-                    })
-                    print("🔧 应用Render环境数据库优化配置")
-                
-                self.engine = create_engine(database_url, **engine_kwargs)
+                )
             
             self.Session = sessionmaker(bind=self.engine)
             
