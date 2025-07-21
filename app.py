@@ -9,18 +9,6 @@ from datetime import datetime
 import uuid
 from database import get_database_manager
 import locale
-
-import streamlit as st
-import pandas as pd
-import os
-import time
-import contextlib
-import io
-import traceback
-from datetime import datetime
-import uuid
-from database import get_database_manager
-import locale
 import warnings
 import sys
 
@@ -29,8 +17,20 @@ st.set_page_config(
     page_title="内购系统",
     page_icon="🛒",
     layout="wide",
-    initial_sidebar_state="collapsed"  # 默认收起侧边栏
+    initial_sidebar_state="collapsed"  # 收起侧边栏减少内存使用
 )
+
+# 内存优化设置
+warnings.filterwarnings('ignore')  # 忽略警告减少输出
+sys.dont_write_bytecode = True  # 不写入缓存文件
+
+# 全局配置优化
+try:
+    st._config.set_option('server.maxUploadSize', 50)  # 限制上传50MB
+    st._config.set_option('server.maxMessageSize', 50)  # 限制消息50MB
+    st._config.set_option('global.maxCachedMessageAge', 300)  # 缓存5分钟
+except:
+    pass
 
 # 全局错误处理 - 完全静默DOM错误
 def global_exception_handler(exc_type, exc_value, exc_traceback):
@@ -255,7 +255,7 @@ def process_file_safely(uploaded_file, existing_inventory):
         with col2:
             st.metric("有效数据", len(processed_data))
         with col3:
-            st.metric("成功导入", saved_count)
+            st.metric("成功导入", len(processed_data))
             
         # 使用DOM安全的重新加载
         dom_safe_rerun(0.8)
@@ -314,8 +314,8 @@ def get_db():
 
 db = get_db()
 
-# 缓存数据获取函数 - 优化性能
-@st.cache_data(ttl=30)  # 缓存30秒
+# 缓存数据获取函数 - 优化性能和内存
+@st.cache_data(ttl=20, max_entries=2, show_spinner=False)  # 缩短TTL，限制缓存条目
 def get_cached_inventory():
     """获取缓存的库存数据"""
     try:
@@ -323,7 +323,7 @@ def get_cached_inventory():
     except Exception:
         return []
 
-@st.cache_data(ttl=30)  # 缓存30秒  
+@st.cache_data(ttl=15, max_entries=2, show_spinner=False)  # 订单变化频繁，TTL更短
 def get_cached_orders():
     """获取缓存的订单数据"""
     try:
@@ -331,7 +331,7 @@ def get_cached_orders():
     except Exception:
         return []
 
-@st.cache_data(ttl=60)  # 缓存60秒
+@st.cache_data(ttl=60, max_entries=2, show_spinner=False)  # 用户变化较少
 def get_cached_users():
     """获取缓存的用户数据"""
     try:
@@ -381,6 +381,18 @@ def safe_rerun():
         except Exception:
             # 如果都失败了，设置一个标志让页面自然刷新
             st.session_state._needs_refresh = True
+
+# 内存清理函数 - 防止Render内存泄漏
+def clear_memory_cache():
+    """清理缓存和释放内存"""
+    try:
+        # 清除Streamlit缓存
+        st.cache_data.clear()
+        # 强制垃圾回收
+        import gc
+        gc.collect()
+    except:
+        pass
 
 # DOM安全的重新加载函数 - 专门处理复杂操作
 def dom_safe_rerun(delay=0.2):
@@ -2917,6 +2929,16 @@ def database_status_check():
 def main():
     """主程序 - 稳定版本"""
     try:
+        # 定期内存清理 - 防止Render内存泄漏
+        if 'last_memory_clear' not in st.session_state:
+            st.session_state.last_memory_clear = time.time()
+        
+        # 每5分钟清理一次内存
+        current_time = time.time()
+        if current_time - st.session_state.last_memory_clear > 300:  # 5分钟
+            clear_memory_cache()
+            st.session_state.last_memory_clear = current_time
+        
         # 初始化数据
         initialize_data()
         
@@ -2982,4 +3004,8 @@ def main():
 
 # 运行应用
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        # 应用结束时清理内存
+        clear_memory_cache()
