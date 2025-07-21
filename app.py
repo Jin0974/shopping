@@ -48,7 +48,7 @@ def optimized_file_upload_handler(existing_inventory):
         "选择CSV或Excel文件",
         type=['csv', 'xlsx'],
         help="支持CSV和Excel格式，建议使用CSV格式以获得更好性能",
-        key=f"inventory_file_uploader_{len(existing_inventory)}"
+        key="inventory_file_uploader_main"
     )
     
     if uploaded_file is not None:
@@ -907,9 +907,6 @@ def inventory_management():
                     del st.session_state[key]
             st.success("✅ 页面已刷新！")
             st.rerun()
-        
-        # 当没有库存时使用优化的批量导入
-        optimized_file_upload_handler([])
 
 # 订单管理
 def order_management():
