@@ -6,9 +6,15 @@ from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 import streamlit as st
 import uuid
+import time
 
 # 数据库配置
 Base = declarative_base()
+
+# 检测Render环境
+def is_render_environment():
+    """检测是否在Render环境中运行"""
+    return os.environ.get('RENDER') is not None or os.environ.get('RENDER_SERVICE_NAME') is not None
 
 # 用户模型
 class User(Base):
@@ -93,19 +99,35 @@ class DatabaseManager:
                     connect_args={'check_same_thread': False}
                 )
             else:
-                # PostgreSQL配置
-                self.engine = create_engine(
-                    database_url,
-                    pool_pre_ping=True,
-                    pool_recycle=300,  # 连接回收时间5分钟
-                    pool_size=5,  # 连接池大小
-                    max_overflow=10,  # 最大溢出连接
-                    echo=False,  # 生产环境关闭详细日志
-                    connect_args={
+                # PostgreSQL配置 - 根据环境优化
+                engine_kwargs = {
+                    'pool_pre_ping': True,
+                    'pool_recycle': 300,  # 连接回收时间5分钟
+                    'pool_size': 5,  # 连接池大小
+                    'max_overflow': 10,  # 最大溢出连接
+                    'echo': False,  # 生产环境关闭详细日志
+                    'connect_args': {
                         'sslmode': 'require',  # 要求SSL连接
                         'connect_timeout': 30,  # 连接超时30秒
                     }
-                )
+                }
+                
+                # Render环境特殊优化
+                if is_render_environment():
+                    engine_kwargs.update({
+                        'pool_size': 3,  # Render环境减少连接池大小
+                        'max_overflow': 5,  # 减少溢出连接
+                        'pool_recycle': 180,  # 更频繁回收（3分钟）
+                        'pool_timeout': 20,  # 缩短获取连接超时
+                        'connect_args': {
+                            'sslmode': 'require',
+                            'connect_timeout': 15,  # 缩短连接超时
+                            'command_timeout': 30,  # 命令超时30秒
+                        }
+                    })
+                    print("🔧 应用Render环境数据库优化配置")
+                
+                self.engine = create_engine(database_url, **engine_kwargs)
             
             self.Session = sessionmaker(bind=self.engine)
             
@@ -299,6 +321,65 @@ class DatabaseManager:
         finally:
             session.close()
     
+    def update_order(self, order_id, order_data):
+        """更新订单 - Render环境优化版本"""
+        session = None
+        try:
+            print(f"🔄 开始更新订单: {order_id}")
+            
+            # 获取新的数据库会话，确保连接新鲜
+            session = self.get_session()
+            
+            # 设置较短的超时时间，避免在Render环境中长时间等待
+            if hasattr(session, 'execute'):
+                try:
+                    session.execute('SET statement_timeout = 30000;')  # 30秒超时
+                except:
+                    pass  # 如果是SQLite则忽略
+            
+            # 查找现有订单
+            existing_order = session.query(Order).filter_by(order_id=order_id).first()
+            if not existing_order:
+                print(f"❌ 订单 {order_id} 不存在")
+                return False
+            
+            # 更新订单数据
+            existing_order.user_name = order_data.get("user_name", existing_order.user_name)
+            existing_order.items_json = json.dumps(order_data.get("items", []))
+            existing_order.original_amount = order_data.get("original_amount", existing_order.original_amount)
+            existing_order.total_items = order_data.get("total_items", existing_order.total_items)
+            existing_order.discount_rate = order_data.get("discount_rate", existing_order.discount_rate)
+            existing_order.discount_text = order_data.get("discount_text", existing_order.discount_text)
+            existing_order.discount_savings = order_data.get("discount_savings", existing_order.discount_savings)
+            existing_order.total_amount = order_data.get("total_amount", existing_order.total_amount)
+            existing_order.payment_method = order_data.get("payment_method", existing_order.payment_method)
+            existing_order.cash_amount = order_data.get("cash_amount", existing_order.cash_amount)
+            existing_order.voucher_amount = order_data.get("voucher_amount", existing_order.voucher_amount)
+            # order_time 保持原值
+            
+            # 使用显式的flush和commit，增强事务控制
+            session.flush()  # 先flush确保数据写入缓冲区
+            session.commit()  # 然后提交事务
+            
+            print(f"✅ 订单更新成功: {order_id}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ 订单更新异常: {e}")
+            if session:
+                try:
+                    session.rollback()
+                except:
+                    pass  # 如果rollback也失败，忽略
+            return False
+            
+        finally:
+            if session:
+                try:
+                    session.close()
+                except:
+                    pass  # 确保session总是能被关闭
+    
     def load_users(self):
         """加载用户数据"""
         session = self.get_session()
@@ -345,6 +426,25 @@ class DatabaseManager:
         except Exception as e:
             session.rollback()
             print(f"❌ 订单清空失败: {e}")
+            raise e
+        finally:
+            session.close()
+    
+    def delete_order(self, order_id):
+        """删除指定订单"""
+        session = self.get_session()
+        try:
+            deleted_count = session.query(Order).filter(Order.order_id == order_id).delete()
+            session.commit()
+            if deleted_count > 0:
+                print(f"✅ 订单 {order_id} 删除成功")
+                return True
+            else:
+                print(f"⚠️ 订单 {order_id} 不存在")
+                return False
+        except Exception as e:
+            session.rollback()
+            print(f"❌ 删除订单 {order_id} 失败: {e}")
             raise e
         finally:
             session.close()
