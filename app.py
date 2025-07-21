@@ -24,6 +24,14 @@ import locale
 import warnings
 import sys
 
+# 性能优化配置
+st.set_page_config(
+    page_title="内购系统",
+    page_icon="🛒",
+    layout="wide",
+    initial_sidebar_state="collapsed"  # 默认收起侧边栏
+)
+
 # 全局错误处理 - 完全静默DOM错误
 def global_exception_handler(exc_type, exc_value, exc_traceback):
     """全局异常处理器，静默处理DOM错误"""
@@ -305,6 +313,31 @@ def get_db():
     return get_database_manager()
 
 db = get_db()
+
+# 缓存数据获取函数 - 优化性能
+@st.cache_data(ttl=30)  # 缓存30秒
+def get_cached_inventory():
+    """获取缓存的库存数据"""
+    try:
+        return get_inventory()
+    except Exception:
+        return []
+
+@st.cache_data(ttl=30)  # 缓存30秒  
+def get_cached_orders():
+    """获取缓存的订单数据"""
+    try:
+        return get_orders()
+    except Exception:
+        return []
+
+@st.cache_data(ttl=60)  # 缓存60秒
+def get_cached_users():
+    """获取缓存的用户数据"""
+    try:
+        return get_users()
+    except Exception:
+        return []
 
 # 错误处理装饰器
 def handle_frontend_errors(func):
@@ -783,7 +816,7 @@ def admin_page():
     """管理员页面"""
     st.title("📊 管理员控制面板")
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["库存管理", "订单管理", "用户管理", "数据统计", "🔍 数据库检查"])
+    tab1, tab2, tab3, tab4 = st.tabs(["库存管理", "订单管理", "用户管理", "🔍 数据库检查"])
     
     with tab1:
         inventory_management()
@@ -795,9 +828,6 @@ def admin_page():
         user_management()
     
     with tab4:
-        data_statistics()
-    
-    with tab5:
         database_status_check()
 
 # 库存管理
@@ -1076,12 +1106,13 @@ def inventory_management():
             st.success("✅ 页面已刷新！")
             st.rerun()
 
-# 订单管理
+# 订单管理 - 优化版本
 def order_management():
     """订单管理"""
     st.subheader("📋 订单管理")
     
-    orders = load_data(ORDERS_FILE)
+    # 使用缓存数据减少加载时间
+    orders = get_cached_orders()
     
     if orders:
         # 计算统计数据 - 兼容新旧订单格式
@@ -1242,77 +1273,6 @@ def user_management():
                 else:
                     st.error("无法删除管理员账户")
 
-# 数据统计
-def data_statistics():
-    """数据统计"""
-    st.subheader("📊 数据统计")
-    
-    orders = load_data(ORDERS_FILE)
-    inventory = load_data(INVENTORY_FILE)
-    
-    if orders:
-        df = pd.DataFrame(orders)
-        
-        # 销售统计
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("### 💰 支付方式统计")
-            # 计算现金和内购券支付金额（兼容新旧订单）
-            total_cash = sum(order.get('cash_amount', 0) for order in orders)
-            total_voucher = sum(order.get('voucher_amount', 0) for order in orders)
-            total_original = sum(order.get('original_amount', order.get('total_amount', 0)) for order in orders)
-            total_discount = sum(order.get('discount_savings', 0) for order in orders)
-            
-            # 统计图表数据
-            payment_data = pd.DataFrame({
-                '支付方式': ['现金支付', '内购券支付'],
-                '金额': [total_cash, total_voucher]
-            })
-            st.bar_chart(payment_data.set_index('支付方式'))
-            
-            # 显示具体数值
-            st.write(f"**现金支付总额:** ¥{total_cash:.2f}")
-            st.write(f"**内购券支付总额:** ¥{total_voucher:.2f}")
-            st.write(f"**商品原价总额:** ¥{total_original:.2f}")
-            st.write(f"**折扣优惠总额:** ¥{total_discount:.2f}")
-            
-            # 计算平均折扣率（仅针对现金支付订单）
-            cash_orders = [order for order in orders if order.get('voucher_amount', 0) == 0]
-            if cash_orders:
-                cash_original = sum(order.get('original_amount', order.get('total_amount', 0)) for order in cash_orders)
-                cash_discount = sum(order.get('discount_savings', 0) for order in cash_orders)
-                if cash_original > 0:
-                    avg_discount_rate = (cash_discount / cash_original) * 100
-                    st.write(f"**现金支付平均折扣率:** {avg_discount_rate:.1f}%")
-        
-        with col2:
-            st.write("### 👥 用户购买统计")
-            user_stats = df['user_name'].value_counts()
-            st.bar_chart(user_stats)
-        
-        # 商品销售统计
-        st.write("### 商品销售统计")
-        product_sales = {}
-        for order in orders:
-            for item in order.get('items', []):
-                product_name = item['product_name']
-                quantity = item['quantity']
-                if product_name in product_sales:
-                    product_sales[product_name] += quantity
-                else:
-                    product_sales[product_name] = quantity
-        
-        if product_sales:
-            sales_df = pd.DataFrame(list(product_sales.items()), columns=['商品名称', '销售数量'])
-            st.bar_chart(sales_df.set_index('商品名称'))
-    
-    # 库存统计
-    if inventory:
-        st.write("### 库存统计")
-        inventory_df = pd.DataFrame(inventory)
-        st.bar_chart(inventory_df.set_index('name')['stock'])
-
 # 用户购买页面
 def user_page():
     """用户购买页面"""
@@ -1329,8 +1289,9 @@ def user_page():
         user_order_history()
 
 def shopping_page():
-    """商品购买页面"""
-    inventory = get_inventory()
+    """商品购买页面 - 优化版本"""
+    # 使用缓存数据
+    inventory = get_cached_inventory()
     
     if not inventory:
         st.info("暂无商品可购买")
@@ -1624,13 +1585,14 @@ def shopping_page():
             st.session_state.page = "cart"
             st.rerun()
 
-# 新增购物车页面
+# 新增购物车页面 - 优化版本
 @ultimate_error_handler
 def cart_page():
     """购物车页面"""
     with completely_silent():
         st.title("🛒 我的购物车")
-        inventory = get_inventory()
+        # 使用缓存数据
+        inventory = get_cached_inventory()
         if 'cart' not in st.session_state:
             st.session_state.cart = []
         cart = st.session_state.cart
@@ -2047,18 +2009,48 @@ def update_order(order, modified_items, new_cash, new_voucher, final_total, disc
                     product['stock'] -= item['quantity']
                     break
         
-        # 保存数据
+        # 保存数据 - 增强错误处理和重试机制
         try:
             # 使用数据库更新操作而不是删除+插入
             db = get_database_manager()
-            success = db.update_order(order['order_id'], order)
-            if success:
-                print(f"订单更新成功: {order['order_id']}")
-            else:
-                print(f"订单数据库更新失败: {order['order_id']}")
-                return False
+            
+            # 重试机制，最多重试3次
+            retry_count = 3
+            success = False
+            
+            for attempt in range(retry_count):
+                try:
+                    success = db.update_order(order['order_id'], order)
+                    if success:
+                        print(f"订单更新成功: {order['order_id']} (尝试 {attempt + 1})")
+                        break
+                    else:
+                        print(f"订单数据库更新失败: {order['order_id']} (尝试 {attempt + 1})")
+                        if attempt < retry_count - 1:
+                            time.sleep(0.5)  # 等待0.5秒后重试
+                except Exception as e:
+                    print(f"订单数据库更新异常: {e} (尝试 {attempt + 1})")
+                    if attempt < retry_count - 1:
+                        time.sleep(0.5)  # 等待0.5秒后重试
+            
+            if not success:
+                # 如果数据库更新失败，尝试使用文件方式保存
+                print("数据库更新失败，尝试文件方式保存...")
+                try:
+                    orders = get_orders()
+                    for i, existing_order in enumerate(orders):
+                        if existing_order['order_id'] == order['order_id']:
+                            orders[i] = order
+                            break
+                    save_orders(orders)
+                    success = True
+                    print("文件方式保存成功")
+                except Exception as file_error:
+                    print(f"文件保存也失败: {file_error}")
+                    return False
+                    
         except Exception as e:
-            print(f"订单数据库更新失败: {e}")
+            print(f"订单更新完全失败: {e}")
             return False
         
         save_inventory(inventory)
@@ -2067,8 +2059,9 @@ def update_order(order, modified_items, new_cash, new_voucher, final_total, disc
         st.error(f"订单更新失败: {e}")
         return False
 
+@st.fragment  # 优化性能，减少重新渲染
 def modify_order_interface(order, inventory):
-    """完整的订单修改界面"""
+    """完整的订单修改界面 - 优化版本"""
     # 初始化修改状态
     if f'modified_items_{order["order_id"]}' not in st.session_state:
         st.session_state[f'modified_items_{order["order_id"]}'] = order['items'].copy()
@@ -2623,12 +2616,12 @@ def database_status_check():
     col1, col2 = st.columns(2)
     
     with col1:
-        st.write("### 📊 数据统计")
+        st.write("### 📊 基础统计")
         try:
-            # 使用统一的数据库接口
-            inventory = get_inventory()
-            orders = get_orders()
-            users = get_users()
+            # 使用统一的数据库接口 - 优化版本
+            inventory = get_cached_inventory()
+            orders = get_cached_orders()  
+            users = get_cached_users()
             
             # 显示基本统计
             st.metric("商品总数", len(inventory))
