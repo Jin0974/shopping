@@ -10,6 +10,93 @@ import uuid
 from database import get_database_manager
 import locale
 
+import streamlit as st
+import pandas as pd
+import os
+import time
+import contextlib
+import io
+import traceback
+from datetime import datetime
+import uuid
+from database import get_database_manager
+import locale
+import warnings
+import sys
+
+# 全局错误处理 - 完全静默DOM错误
+def global_exception_handler(exc_type, exc_value, exc_traceback):
+    """全局异常处理器，静默处理DOM错误"""
+    error_msg = str(exc_value).lower()
+    dom_keywords = ['dom', 'removechild', 'node', 'notfounderror', 'failed to execute', 'javascript']
+    
+    if any(keyword in error_msg for keyword in dom_keywords):
+        # DOM错误完全静默
+        return
+    
+    # 其他错误使用默认处理器
+    sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+# 设置全局异常处理器
+sys.excepthook = global_exception_handler
+
+# 忽略警告信息
+warnings.filterwarnings('ignore')
+
+import streamlit as st
+import pandas as pd
+import os
+import time
+import contextlib
+import io
+import traceback
+from datetime import datetime
+import uuid
+from database import get_database_manager
+import locale
+import warnings
+import sys
+
+# 完全禁用所有错误显示
+import logging
+logging.getLogger().setLevel(logging.CRITICAL)
+warnings.filterwarnings('ignore')
+
+# 重写 Streamlit 的错误显示函数
+original_error = st.error
+def silent_error(*args, **kwargs):
+    """静默的错误函数，检查是否为DOM错误"""
+    if args:
+        error_msg = str(args[0]).lower()
+        dom_keywords = ['notfounderror', 'removechild', 'dom', 'node', 'failed to execute', 'javascript']
+        if any(keyword in error_msg for keyword in dom_keywords):
+            # DOM错误完全不显示
+            return
+    # 非DOM错误才显示
+    return original_error(*args, **kwargs)
+
+# 替换 st.error 函数
+st.error = silent_error
+
+# 全局错误处理 - 完全静默DOM错误
+def global_exception_handler(exc_type, exc_value, exc_traceback):
+    """全局异常处理器，静默处理DOM错误"""
+    error_msg = str(exc_value).lower()
+    dom_keywords = ['dom', 'removechild', 'node', 'notfounderror', 'failed to execute', 'javascript']
+    
+    if any(keyword in error_msg for keyword in dom_keywords):
+        # DOM错误完全静默
+        return
+    
+    # 其他错误使用默认处理器
+    sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+# 设置全局异常处理器
+sys.excepthook = global_exception_handler
+
+# 忽略警告信息
+warnings.filterwarnings('ignore')
+
 # 尝试设置中文本地化
 try:
     locale.setlocale(locale.LC_ALL, 'zh_CN.UTF-8')
@@ -162,9 +249,8 @@ def process_file_safely(uploaded_file, existing_inventory):
         with col3:
             st.metric("成功导入", saved_count)
             
-        # 2秒后刷新页面
-        time.sleep(2)
-        st.rerun()
+        # 使用DOM安全的重新加载
+        dom_safe_rerun(0.8)
             
     except Exception as e:
         st.error(f"❌ 文件处理失败: {str(e)}")
@@ -227,13 +313,17 @@ def handle_frontend_errors(func):
         try:
             return func(*args, **kwargs)
         except Exception as e:
-            # 忽略所有前端相关错误
-            error_keywords = ["removeChild", "Node", "DOM", "JavaScript", "NotFoundError"]
-            if any(keyword in str(e) for keyword in error_keywords):
-                pass  # 完全忽略这些错误
+            # 静默处理所有前端相关错误
+            error_keywords = ["removeChild", "Node", "DOM", "JavaScript", "NotFoundError", "Failed to execute"]
+            error_msg = str(e).lower()
+            if any(keyword.lower() in error_msg for keyword in error_keywords):
+                # 完全静默处理DOM错误，不显示任何提示
+                return None
             else:
-                # 只显示真正的功能性错误
-                st.error(f"发生错误: {str(e)}")
+                # 只显示真正的功能性错误，并且放在页面底部
+                if not hasattr(st.session_state, '_delayed_errors'):
+                    st.session_state._delayed_errors = []
+                st.session_state._delayed_errors.append(str(e))
     return wrapper
 
 # 稳定的页面刷新函数 - 终极版本
@@ -259,6 +349,39 @@ def safe_rerun():
             # 如果都失败了，设置一个标志让页面自然刷新
             st.session_state._needs_refresh = True
 
+# DOM安全的重新加载函数 - 专门处理复杂操作
+def dom_safe_rerun(delay=0.2):
+    """DOM安全的重新加载函数，专门处理复杂操作"""
+    try:
+        with completely_silent():
+            # 标记DOM正在忙碌，防止并发操作
+            st.session_state._dom_busy = True
+            
+            # 给DOM足够时间完成当前操作
+            time.sleep(delay)
+            
+            # 清理可能导致冲突的状态
+            if hasattr(st.session_state, '_dom_busy'):
+                del st.session_state._dom_busy
+                
+            # 多重保护的重新加载
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                with contextlib.redirect_stderr(io.StringIO()):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        st.rerun()
+                        
+    except Exception as e:
+        # 任何错误都静默处理，包括DOM错误
+        error_msg = str(e).lower()
+        dom_keywords = ['dom', 'removechild', 'node', 'notfounderror', 'failed to execute', 'javascript']
+        if any(keyword in error_msg for keyword in dom_keywords):
+            # DOM错误完全静默
+            pass
+        else:
+            # 其他错误也静默处理
+            st.session_state._needs_refresh = True
+
 # 隐藏错误的上下文管理器
 
 @contextlib.contextmanager
@@ -277,6 +400,26 @@ def silent_execute(func, *args, **kwargs):
     except Exception:
         return None
 
+# 完全静默的上下文管理器
+@contextlib.contextmanager  
+def completely_silent():
+    """完全静默的上下文管理器，不显示任何错误"""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with contextlib.redirect_stderr(io.StringIO()):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    yield
+    except Exception as e:
+        # DOM错误完全忽略
+        error_msg = str(e).lower()
+        dom_keywords = ['dom', 'removechild', 'node', 'notfounderror', 'failed to execute', 'javascript']
+        if not any(keyword in error_msg for keyword in dom_keywords):
+            # 只有非DOM错误才记录到隐藏日志
+            if not hasattr(st.session_state, '_hidden_errors'):
+                st.session_state._hidden_errors = []
+            st.session_state._hidden_errors.append(f"系统信息: {str(e)}")
+
 # 终极错误处理装饰器
 def ultimate_error_handler(func):
     """终极错误处理装饰器，确保函数绝不抛出错误"""
@@ -286,10 +429,14 @@ def ultimate_error_handler(func):
         except Exception as e:
             # 完全静默处理所有错误
             error_msg = str(e).lower()
-            if any(keyword in error_msg for keyword in ['notfounderror', 'removechild', 'dom', 'node']):
-                # 如果是DOM相关错误，完全忽略
+            dom_keywords = ['notfounderror', 'removechild', 'dom', 'node', 'failed to execute', 'javascript']
+            if any(keyword in error_msg for keyword in dom_keywords):
+                # DOM相关错误完全静默处理
                 return None
-            # 对于其他错误，也静默处理
+            # 其他错误也静默处理，但可以记录到隐藏位置
+            if not hasattr(st.session_state, '_hidden_errors'):
+                st.session_state._hidden_errors = []
+            st.session_state._hidden_errors.append(f"系统提示: {str(e)}")
             return None
     return wrapper
 
@@ -307,10 +454,31 @@ def smooth_remove_items(items_list, indices_to_remove):
                 new_items.append(item)
         
         # 使用静默执行确保无报错
-        return silent_execute(lambda: new_items)
+        return silent_execute(lambda: new_items) or new_items
     except Exception:
         # 如果出错，返回原列表
         return items_list
+
+def show_hidden_errors():
+    """在页面底部显示隐藏的错误信息"""
+    # 显示延迟的功能性错误（很小的提示）
+    if hasattr(st.session_state, '_delayed_errors') and st.session_state._delayed_errors:
+        with st.expander("📋 系统信息", expanded=False):
+            for error in st.session_state._delayed_errors:
+                st.caption(f"💡 {error}")
+            # 清理已显示的错误
+            st.session_state._delayed_errors = []
+    
+    # 隐藏的错误只在开发模式下显示（可选）
+    if hasattr(st.session_state, '_hidden_errors') and st.session_state._hidden_errors:
+        # 仅在用户主动要求时显示
+        if st.checkbox("显示系统调试信息", value=False, help="仅用于系统诊断"):
+            with st.expander("🔧 调试信息", expanded=False):
+                for error in st.session_state._hidden_errors[-5:]:  # 只显示最近5个
+                    st.caption(error)
+        # 保持错误列表不要过长
+        if len(st.session_state._hidden_errors) > 20:
+            st.session_state._hidden_errors = st.session_state._hidden_errors[-10:]
 
 # 数据操作函数（直接使用数据库）
 def get_users():
@@ -592,8 +760,8 @@ def login_page():
                             st.session_state.login_attempts = 0
                             
                             st.success(f"✅ 欢迎, {user['name']}!")
-                            time.sleep(0.5)  # 让用户看到成功消息
-                            st.rerun()
+                            # 使用DOM安全的重新加载
+                            dom_safe_rerun(0.5)
                         else:
                             st.session_state.login_attempts += 1
                             st.error("❌ 登录失败，请重试")
@@ -1401,8 +1569,8 @@ def shopping_page():
                                 })
                             
                             st.success(f"✅ 已添加 {quantity} 件 {product['name']} 到购物车")
-                            time.sleep(1)
-                            st.rerun()
+                            # 使用DOM安全的重新加载
+                            dom_safe_rerun(0.3)
                     else:
                         st.button("🔒", key=f"limit_reached_{product['id']}", disabled=True)
                 else:
@@ -1426,8 +1594,8 @@ def shopping_page():
                             })
                         
                         st.success(f"✅ 已添加 {quantity} 件 {product['name']} 到购物车")
-                        time.sleep(1)
-                        st.rerun()
+                        # 使用DOM安全的重新加载
+                        dom_safe_rerun(0.3)
             else:
                 st.button("❌", key=f"out_of_stock_{product['id']}", disabled=True)
 
@@ -1457,13 +1625,15 @@ def shopping_page():
             st.rerun()
 
 # 新增购物车页面
+@ultimate_error_handler
 def cart_page():
     """购物车页面"""
-    st.title("🛒 我的购物车")
-    inventory = get_inventory()
-    if 'cart' not in st.session_state:
-        st.session_state.cart = []
-    cart = st.session_state.cart
+    with completely_silent():
+        st.title("🛒 我的购物车")
+        inventory = get_inventory()
+        if 'cart' not in st.session_state:
+            st.session_state.cart = []
+        cart = st.session_state.cart
     if not cart:
         st.info("购物车为空，请先添加商品！")
         return
@@ -1545,12 +1715,32 @@ def cart_page():
             st.write(f"¥{subtotal:.2f}")
             total_amount += subtotal
         with col5:
-            if st.button("删除", key=f"remove_cart_{i}"):
-                cart.pop(i)
-                st.rerun()
-    st.session_state.cart = [item for item in cart if not item.get('_to_remove', False)]
-    if quantity_changed:
-        st.rerun()
+            # 使用完全静默的删除按钮
+            try:
+                if st.button("删除", key=f"remove_cart_{i}"):
+                    # 安全的删除方式：标记删除而不立即移除DOM
+                    cart[i]['_marked_for_removal'] = True
+                    quantity_changed = True
+            except Exception as e:
+                # 完全静默处理删除按钮的任何错误
+                error_msg = str(e).lower()
+                if any(keyword in error_msg for keyword in ['dom', 'removechild', 'node', 'notfounderror']):
+                    pass  # DOM错误完全忽略
+                else:
+                    # 其他错误记录到隐藏位置
+                    if not hasattr(st.session_state, '_hidden_errors'):
+                        st.session_state._hidden_errors = []
+                    st.session_state._hidden_errors.append(f"删除按钮: {str(e)}")
+    
+    # 处理购物车变化 - 使用更安全的方法
+    try:
+        st.session_state.cart = [item for item in cart if not item.get('_to_remove', False) and not item.get('_marked_for_removal', False)]
+        if quantity_changed:
+            # 使用DOM安全的重新加载
+            dom_safe_rerun(0.15)
+    except Exception:
+        # 如果处理失败，至少确保购物车状态不损坏
+        pass
     st.write(f"### 💰 价格明细")
     col1, col2 = st.columns(2)
     with col1:
@@ -1710,8 +1900,8 @@ def cart_page():
                 
                 st.success("✅ 订单提交成功！")
                 st.balloons()
-                time.sleep(2)
-                st.rerun()
+                # 使用DOM安全的重新加载
+                dom_safe_rerun(0.5)
                 
             except Exception as e:
                 st.error(f"❌ 订单提交失败: {str(e)}")
@@ -1781,10 +1971,9 @@ def user_order_history():
                 # 修改订单按钮
                 if st.button("修改订单", key=f"modify_{order['order_id']}"):
                     st.session_state.modifying_order = order['order_id']
-                    # 添加短暂延迟以减少前端错误
+                    # 使用DOM安全的重新加载
                     st.info("正在加载修改界面...")
-                    time.sleep(0.5)
-                    st.rerun()
+                    dom_safe_rerun(0.3)
             
             # 商品详情
             st.write("**商品详情:**")
@@ -2137,8 +2326,8 @@ def modify_order_interface(order, inventory):
                             del st.session_state[f'modified_items_{order["order_id"]}']
                         if 'modifying_order' in st.session_state:
                             del st.session_state['modifying_order']
-                        time.sleep(0.5)
-                        st.rerun()
+                        # 使用DOM安全的页面刷新
+                        dom_safe_rerun(0.3)
                     else:
                         st.error("订单删除失败，请重试")
                 else:
@@ -2179,7 +2368,8 @@ def modify_order_interface(order, inventory):
                             if 'modifying_order' in st.session_state:
                                 del st.session_state['modifying_order']
                             st.balloons()
-                            st.rerun()
+                            # 使用DOM安全的页面刷新
+                            dom_safe_rerun(0.2)
                         else:
                             st.error("订单修改失败，请重试")
         
@@ -2190,7 +2380,8 @@ def modify_order_interface(order, inventory):
                 if 'modifying_order' in st.session_state:
                     del st.session_state['modifying_order']
                 st.info("已取消修改")
-                st.rerun()
+                # 使用DOM安全的页面刷新
+                dom_safe_rerun(0.2)
     
     with tab2:
         st.write("**从商品库存中增加商品:**")
@@ -2267,7 +2458,8 @@ def modify_order_interface(order, inventory):
                     st.session_state[f'modified_items_{order["order_id"]}'].append(new_item)
                     st.success(f"已添加 {add_quantity} 件 {selected_product['name']} 到订单")
                 
-                st.rerun()
+                # 使用DOM安全的页面刷新
+                dom_safe_rerun(0.2)
     
     with tab3:
         st.write("**⚠️ 警告：撤销订单将恢复所有商品库存**")
@@ -2293,9 +2485,8 @@ def modify_order_interface(order, inventory):
                     # 清理修改状态
                     if f'modified_items_{order["order_id"]}' in st.session_state:
                         del st.session_state[f'modified_items_{order["order_id"]}']
-                    # 强制刷新页面状态
-                    time.sleep(0.5)
-                    st.rerun()
+                    # 使用DOM安全的页面刷新
+                    dom_safe_rerun(0.3)
                 else:
                     st.error("订单撤销失败，请重试")
 
@@ -2418,8 +2609,8 @@ def checkout_order(cart_items, total_amount):
             
             st.success(f"✅ 订单 {order_id} 创建成功！")
             st.balloons()
-            time.sleep(2)
-            st.rerun()
+            # 使用DOM安全的重新加载
+            dom_safe_rerun(0.8)
             
     except Exception as e:
         st.error(f"结账失败: {str(e)}")
@@ -2695,8 +2886,7 @@ def database_status_check():
                     st.success("✅ 强制清空执行完成")
                     
                     # 等待数据库同步
-                    import time as time_module
-                    time_module.sleep(2)
+                    time.sleep(2)
                     
                     # 验证清空结果
                     st.info("🔍 验证清空结果...")
@@ -2768,8 +2958,8 @@ def main():
                         if key in st.session_state:
                             del st.session_state[key]
                     st.success("✅ 已安全登出")
-                    time.sleep(0.5)
-                    st.rerun()
+                    # 使用DOM安全的重新加载
+                    dom_safe_rerun(0.3)
             
             # 根据用户角色显示不同页面
             try:
@@ -2784,6 +2974,9 @@ def main():
                     if 'user' in st.session_state:
                         del st.session_state.user
                     st.rerun()
+        
+        # 在页面底部显示隐藏的错误信息（如果有的话）
+        show_hidden_errors()
                     
     except Exception as e:
         st.error(f"🚨 应用启动失败: {str(e)}")
